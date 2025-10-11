@@ -114,11 +114,11 @@ func (c cosine) Calculate(a, b []float32) float32 {
 
 func (c cosine) CalculateBatch(queries [][]float32, target []float32) []float32 {
 	// Optimize by precomputing the target's norm once
-	normTarget := norm(target)
+	normTarget := Norm(target)
 
 	results := make([]float32, len(queries))
 	for i, query := range queries {
-		normQuery := norm(query)
+		normQuery := Norm(query)
 		results[i] = cosineDistanceWithNorms(query, target, normQuery, normTarget)
 	}
 	return results
@@ -194,13 +194,23 @@ func dotProduct(a, b []float32) float32 {
 	return sum
 }
 
-// norm computes the L2 norm (Euclidean length/magnitude) of a vector.
-// This represents the "length" of the vector from the origin.
+// Norm computes the L2 norm (Euclidean length/magnitude) of a vector.
+// This represents the "length" of the vector from the origin in n-dimensional space.
+//
+// The norm is useful for:
+//   - Measuring vector magnitude
+//   - Normalizing vectors to unit length
+//   - Computing distances and similarities
 //
 // Formula: sqrt(sum(v[i]^2))
 //
+// Example:
+//
+//	v := []float32{3, 4}
+//	length := Norm(v)  // Returns 5.0 (3²+4² = 25, sqrt(25) = 5)
+//
 // Time complexity: O(n) where n is the vector dimension
-func norm(v []float32) float32 {
+func Norm(v []float32) float32 {
 	var sum float32
 	for _, x := range v {
 		sum += x * x
@@ -209,7 +219,7 @@ func norm(v []float32) float32 {
 }
 
 // normSquared computes the squared L2 norm of a vector.
-// This is faster than norm() as it avoids the sqrt operation.
+// This is faster than Norm() as it avoids the sqrt operation.
 // Use this when you only need to compare magnitudes.
 //
 // Formula: sum(v[i]^2)
@@ -240,8 +250,8 @@ func normSquared(v []float32) float32 {
 // Time complexity: O(n) where n is the vector dimension
 func cosineDistance(a, b []float32) float32 {
 	dot := dotProduct(a, b)
-	normA := norm(a)
-	normB := norm(b)
+	normA := Norm(a)
+	normB := Norm(b)
 
 	if normA == 0 || normB == 0 {
 		return 1.0
@@ -300,4 +310,95 @@ func cosineDistanceWithNorms(a, b []float32, normA, normB float32) float32 {
 // Time complexity: O(n) where n is the vector dimension
 func innerProduct(a, b []float32) float32 {
 	return -dotProduct(a, b)
+}
+
+// Scale returns a new vector with all elements multiplied by the given scalar.
+// The original vector is not modified.
+//
+// Use cases:
+//   - Scaling vectors to a desired magnitude
+//   - Implementing weighted vectors
+//   - Normalizing vectors (when combined with Norm)
+//
+// Formula: result[i] = v[i] * scalar
+//
+// Example:
+//
+//	v := []float32{1, 2, 3}
+//	doubled := Scale(v, 2.0)        // Returns [2, 4, 6]
+//	inverted := Scale(v, -1.0)      // Returns [-1, -2, -3]
+//	normalized := Scale(v, 1.0/Norm(v))  // Returns unit vector
+//
+// Time complexity: O(n) where n is the vector dimension
+func Scale(v []float32, scalar float32) []float32 {
+	result := make([]float32, len(v))
+	for i := range v {
+		result[i] = v[i] * scalar
+	}
+	return result
+}
+
+// Normalize returns a new vector with the same direction as v but with unit length (magnitude = 1).
+// The original vector is not modified.
+//
+// Normalization is essential for:
+//   - Cosine similarity calculations (removes magnitude, keeps direction)
+//   - Comparing vectors by direction only
+//   - Machine learning feature scaling
+//   - Unit vector representations
+//
+// Special case:
+//   - If the input is a zero vector (all elements are 0), returns the zero vector unchanged
+//     to avoid division by zero and NaN values
+//
+// Formula: result = v / ||v|| where ||v|| is the L2 norm
+//
+// Example:
+//
+//	v := []float32{3, 4}
+//	unit := Normalize(v)     // Returns [0.6, 0.8] (magnitude = 1)
+//	zero := []float32{0, 0}
+//	safe := Normalize(zero)  // Returns [0, 0] (safely handles zero vector)
+//
+// Time complexity: O(n) where n is the vector dimension
+func Normalize(v []float32) []float32 {
+	norm := Norm(v)
+	if norm == 0 {
+		return v
+	}
+	return Scale(v, 1.0/norm)
+}
+
+// NormalizeInPlace normalizes the vector to unit length in-place, modifying the original vector.
+// This is more memory-efficient than Normalize() as it doesn't allocate a new vector.
+//
+// Use this when:
+//   - You don't need to keep the original vector
+//   - Memory efficiency is important
+//   - Processing large batches of vectors
+//
+// Special case:
+//   - If the input is a zero vector (all elements are 0), the vector remains unchanged
+//     to avoid division by zero and NaN values
+//
+// Formula: v[i] = v[i] / ||v|| for all i
+//
+// Example:
+//
+//	v := []float32{3, 4}
+//	NormalizeInPlace(v)      // v is now [0.6, 0.8] (magnitude = 1)
+//
+//	zero := []float32{0, 0}
+//	NormalizeInPlace(zero)   // zero remains [0, 0] (safely handles zero vector)
+//
+// Time complexity: O(n) where n is the vector dimension
+func NormalizeInPlace(v []float32) {
+	norm := Norm(v)
+	if norm == 0 {
+		return
+	}
+	scale := 1.0 / norm
+	for i := range v {
+		v[i] *= scale
+	}
 }

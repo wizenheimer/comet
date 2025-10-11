@@ -505,9 +505,9 @@ func TestNorm(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := norm(tt.v)
+			result := Norm(tt.v)
 			if !almostEqual(result, tt.expected) {
-				t.Errorf("norm(%v) = %v, want %v", tt.v, result, tt.expected)
+				t.Errorf("Norm(%v) = %v, want %v", tt.v, result, tt.expected)
 			}
 		})
 	}
@@ -622,8 +622,8 @@ func TestCosineDistanceConsistency(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result1 := cosineDistance(tt.a, tt.b)
-			normA := norm(tt.a)
-			normB := norm(tt.b)
+			normA := Norm(tt.a)
+			normB := Norm(tt.b)
 			result2 := cosineDistanceWithNorms(tt.a, tt.b, normA, normB)
 			if !almostEqual(result1, result2) {
 				t.Errorf("cosineDistance(%v, %v) = %v, but cosineDistanceWithNorms = %v",
@@ -729,7 +729,7 @@ func BenchmarkNorm(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		norm(v)
+		Norm(v)
 	}
 }
 
@@ -740,8 +740,8 @@ func BenchmarkCosineDistanceWithNorms(b *testing.B) {
 		v1[i] = float32(i)
 		v2[i] = float32(i + 1)
 	}
-	normA := norm(v1)
-	normB := norm(v2)
+	normA := Norm(v1)
+	normB := Norm(v2)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
