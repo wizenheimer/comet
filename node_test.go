@@ -43,7 +43,7 @@ func TestNewVectorNode(t *testing.T) {
 
 func TestNewVectorNodeConcurrency(t *testing.T) {
 	const numGoroutines = 100
-	nodes := make([]*Node, numGoroutines)
+	nodes := make([]*VectorNode, numGoroutines)
 	var wg sync.WaitGroup
 
 	wg.Add(numGoroutines)

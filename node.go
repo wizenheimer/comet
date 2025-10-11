@@ -5,67 +5,76 @@ import "sync/atomic"
 // nodeIDCounter is a package-level counter for auto-incrementing node IDs
 var nodeIDCounter uint32
 
-type Node struct {
+type VectorNode struct {
 	id     uint32
 	vector []float32
 }
 
 // NewVectorNode creates a new Node with an auto-incremented ID.
 // The initializer is thread-safe and can be used concurrently
-func NewVectorNode(vector []float32) *Node {
+func NewVectorNode(vector []float32) *VectorNode {
 	id := atomic.AddUint32(&nodeIDCounter, 1)
-	return &Node{
+	return &VectorNode{
+		id:     id,
+		vector: vector,
+	}
+}
+
+// NewVectorNodeWithID creates a new Node with the provided ID.
+// Here the ID uniqueness of the node is delegated to the caller.
+func NewVectorNodeWithID(id uint32, vector []float32) *VectorNode {
+	return &VectorNode{
 		id:     id,
 		vector: vector,
 	}
 }
 
 // ID returns the ID of the node
-func (n *Node) ID() uint32 {
+func (n *VectorNode) ID() uint32 {
 	return n.id
 }
 
 // Vector returns the vector of the node
-func (n *Node) Vector() []float32 {
+func (n *VectorNode) Vector() []float32 {
 	return n.vector
 }
 
 // isComparable returns true if the node is comparable to another node
 // two nodes are comparable if they have the same dimension
-func (n *Node) ComparableToNode(other *Node) bool {
+func (n *VectorNode) ComparableToNode(other *VectorNode) bool {
 	return len(n.vector) == len(other.vector)
 }
 
 // isComparableToVector returns true if the node is comparable to a vector
 // two nodes are comparable if they have the same dimension
-func (n *Node) ComparableToVector(vector []float32) bool {
+func (n *VectorNode) ComparableToVector(vector []float32) bool {
 	return len(n.vector) == len(vector)
 }
 
 // Copy returns a copy of the node
-func (n *Node) Copy() *Node {
-	return &Node{
+func (n *VectorNode) Copy() *VectorNode {
+	return &VectorNode{
 		id:     n.id,
 		vector: append([]float32{}, n.vector...),
 	}
 }
 
 // Add adds a vector to the node
-func (n *Node) Add(vector []float32) {
+func (n *VectorNode) Add(vector []float32) {
 	for i := range n.vector {
 		n.vector[i] += vector[i]
 	}
 }
 
 // Sub subtracts a vector from the node
-func (n *Node) Sub(vector []float32) {
+func (n *VectorNode) Sub(vector []float32) {
 	for i := range n.vector {
 		n.vector[i] -= vector[i]
 	}
 }
 
 // Scale scales the node by a scalar
-func (n *Node) Scale(scalar float32) {
+func (n *VectorNode) Scale(scalar float32) {
 	for i := range n.vector {
 		n.vector[i] *= scalar
 	}
@@ -78,14 +87,14 @@ func (n *Node) Scale(scalar float32) {
 //
 //	node := NewVectorNode([]float32{3, 4})
 //	length := node.L2Norm()  // Returns 5.0
-func (n *Node) L2Norm() float32 {
+func (n *VectorNode) L2Norm() float32 {
 	return Norm(n.vector)
 }
 
 // L2NormSquared returns the squared Euclidean length of the node's vector.
 // This is faster than L2Norm() as it avoids the square root operation.
 // Use this when you only need to compare magnitudes (ordering is preserved).
-func (n *Node) L2NormSquared() float32 {
+func (n *VectorNode) L2NormSquared() float32 {
 	return normSquared(n.vector)
 }
 
@@ -105,7 +114,7 @@ func (n *Node) L2NormSquared() float32 {
 //	node := NewVectorNode([]float32{3, 4})
 //	node.NormalizeInPlace()  // node.Vector() is now [0.6, 0.8]
 //	node.L2Norm()            // Returns 1.0
-func (n *Node) NormalizeInPlace() {
+func (n *VectorNode) NormalizeInPlace() {
 	NormalizeInPlace(n.vector)
 }
 
@@ -126,8 +135,8 @@ func (n *Node) NormalizeInPlace() {
 //	// original.Vector() is still [3, 4]
 //	// normalized.Vector() is [0.6, 0.8]
 //	// Both nodes have the same ID
-func (n *Node) Normalize() *Node {
-	return &Node{
+func (n *VectorNode) Normalize() *VectorNode {
+	return &VectorNode{
 		id:     n.id,
 		vector: Normalize(n.vector),
 	}
