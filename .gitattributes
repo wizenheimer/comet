@@ -1,0 +1,4 @@
+# Exclude YAML and HTML files from language statistics
+*.yaml linguist-vendored
+*.yml linguist-vendored
+*.html linguist-vendored
