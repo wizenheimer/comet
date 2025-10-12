@@ -20,6 +20,7 @@ type bm25TextSearch struct {
 	index           *BM25SearchIndex
 	queries         []string
 	nodeIDs         []uint32
+	documentIDs     []uint32
 	k               int
 	aggregationKind ScoreAggregationKind
 	cutoff          int
@@ -123,6 +124,29 @@ func (s *bm25TextSearch) WithScoreAggregation(kind ScoreAggregationKind) TextSea
 //	search.WithCutoff(-1)  // Disable autocut (default)
 func (s *bm25TextSearch) WithCutoff(cutoff int) TextSearch {
 	s.cutoff = cutoff
+	return s
+}
+
+// WithDocumentIDs sets the eligible document IDs for pre-filtering.
+// Only documents with IDs in this set will be considered as candidates.
+// If empty, all documents are eligible (default behavior).
+//
+// This is useful for combining BM25 text search with metadata filters or
+// other pre-filtering criteria. For example, you can first filter documents
+// by metadata, then perform BM25 search only on the filtered subset.
+//
+// Parameters:
+//   - docIDs: One or more document IDs to restrict search to
+//
+// Returns:
+//   - TextSearch: The search builder for method chaining
+//
+// Example:
+//
+//	search.WithDocumentIDs(1, 2, 3)  // Only search in documents 1, 2, 3
+//	search.WithDocumentIDs()         // No filtering (default)
+func (s *bm25TextSearch) WithDocumentIDs(docIDs ...uint32) TextSearch {
+	s.documentIDs = docIDs
 	return s
 }
 
@@ -262,6 +286,10 @@ func (s *bm25TextSearch) searchSingleQuery(query string) ([]TextResult, error) {
 		return nil, nil
 	}
 
+	// Create document filter for pre-filtering
+	docFilter := NewDocumentFilter(s.documentIDs)
+	defer ReturnDocumentFilter(docFilter)
+
 	// BM25 scoring
 	for _, t := range qtokens {
 		bitmap := s.index.postings[t]
@@ -274,6 +302,10 @@ func (s *bm25TextSearch) searchSingleQuery(query string) ([]TextResult, error) {
 
 		for iter := bitmap.Iterator(); iter.HasNext(); {
 			docID := iter.Next()
+			// Apply document filter
+			if docFilter.ShouldSkip(docID) {
+				continue
+			}
 			tfVal := float64(s.index.tf[t][docID])
 			docLen := float64(s.index.docLengths[docID])
 			// BM25 scoring formula
