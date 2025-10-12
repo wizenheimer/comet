@@ -55,3 +55,17 @@ type VectorIndex interface {
 	// Trained returns true if the index has been trained
 	Trained() bool
 }
+
+type TextIndex interface {
+	// Add a new text to the index
+	Add(id uint32, text string) error
+
+	// Remove a text from the index
+	Remove(id uint32) error
+
+	// NewSearch creates a new search builder
+	NewSearch() TextSearch
+
+	// Flush the text index
+	Flush() error
+}

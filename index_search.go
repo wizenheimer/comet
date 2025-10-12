@@ -1,9 +1,22 @@
 package comet
 
+type Result interface {
+	GetId() uint32
+	GetScore() float32
+}
+
 // VectorResult represents a search result for a vector node
 type VectorResult struct {
 	Node  VectorNode
 	Score float32
+}
+
+func (r VectorResult) GetId() uint32 {
+	return r.Node.ID()
+}
+
+func (r VectorResult) GetScore() float32 {
+	return r.Score
 }
 
 // VectorSearch encapsulates the search context for the vector index
@@ -37,4 +50,41 @@ type VectorSearch interface {
 
 	// Execute the search and return the results
 	Execute() ([]VectorResult, error)
+}
+
+// TextResult represents a search result for a text node
+type TextResult struct {
+	Id    uint32 // The ID of the text node
+	Score float32
+}
+
+func (r TextResult) GetId() uint32 {
+	return r.Id
+}
+
+func (r TextResult) GetScore() float32 {
+	return r.Score
+}
+
+// TextSearch encapsulates the search context for the text index
+type TextSearch interface {
+	// WithQuery sets the query text(s) - supports single or batch queries
+	WithQuery(queries ...string) TextSearch
+
+	// WithNode sets the node ID(s) to search from - supports single or batch nodes
+	WithNode(nodeIDs ...uint32) TextSearch
+
+	// WithK sets the number of results to return
+	WithK(k int) TextSearch
+
+	// WithScoreAggregation sets the strategy for aggregating scores when the same node
+	// appears in results from multiple queries or nodes (defaults to Sum)
+	WithScoreAggregation(kind ScoreAggregationKind) TextSearch
+
+	// WithCutoff sets the autocut parameter for automatically determining result cutoff.
+	// A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
+	WithCutoff(cutoff int) TextSearch
+
+	// Execute the search and return the results
+	Execute() ([]TextResult, error)
 }
