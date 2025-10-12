@@ -16,12 +16,13 @@ var _ VectorSearch = (*ivfpqIndexSearch)(nil)
 //   - Uses PQ for fast approximate distance computation within clusters
 //   - Provides best of both worlds: speed and memory efficiency
 type ivfpqIndexSearch struct {
-	index     *IVFPQIndex
-	queries   [][]float32
-	nodeIDs   []uint32
-	k         int
-	nprobes   int
-	threshold float32
+	index           *IVFPQIndex
+	queries         [][]float32
+	nodeIDs         []uint32
+	k               int
+	nprobes         int
+	threshold       float32
+	aggregationKind ScoreAggregationKind
 }
 
 // WithQuery sets the query vector(s) - supports single or batch queries.
@@ -68,10 +69,20 @@ func (s *ivfpqIndexSearch) WithThreshold(threshold float32) VectorSearch {
 	return s
 }
 
+// WithScoreAggregation sets the strategy for aggregating scores when the same node
+// appears in results from multiple queries or nodes.
+func (s *ivfpqIndexSearch) WithScoreAggregation(kind ScoreAggregationKind) VectorSearch {
+	s.aggregationKind = kind
+	return s
+}
+
 // Execute performs the actual search and returns results.
 //
 // This method validates the search configuration and then executes the search
 // using all specified queries (both direct queries and node-based queries).
+//
+// When multiple queries/nodes are provided, results are aggregated by node ID
+// using the configured aggregation strategy (default: Sum).
 //
 // Returns:
 //   - []VectorResult: Search results sorted by distance with scores
@@ -80,6 +91,18 @@ func (s *ivfpqIndexSearch) Execute() ([]VectorResult, error) {
 	// Validate that at least one of queries or nodeIDs is set
 	if len(s.queries) == 0 && len(s.nodeIDs) == 0 {
 		return nil, fmt.Errorf("must specify either queries or node IDs")
+	}
+
+	// Set default aggregation kind if not specified
+	aggregationKind := s.aggregationKind
+	if aggregationKind == "" {
+		aggregationKind = SumAggregation
+	}
+
+	// Get aggregation instance
+	aggregation, err := NewAggregation(aggregationKind)
+	if err != nil {
+		return nil, err
 	}
 
 	// Collect all queries (both direct queries and node-based queries)
@@ -107,7 +130,16 @@ func (s *ivfpqIndexSearch) Execute() ([]VectorResult, error) {
 		allResults = append(allResults, results...)
 	}
 
-	return allResults, nil
+	// Aggregate results (deduplicates by node ID and combines scores)
+	aggregatedResults := aggregation.Aggregate(allResults)
+
+	// Apply k limit
+	k := s.k
+	if k <= 0 || k > len(aggregatedResults) {
+		k = len(aggregatedResults)
+	}
+
+	return aggregatedResults[:k], nil
 }
 
 // lookupNodeVectors converts node IDs to their corresponding vectors.

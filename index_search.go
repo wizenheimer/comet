@@ -27,6 +27,10 @@ type VectorSearch interface {
 	// WithThreshold sets a distance threshold for results (optional)
 	WithThreshold(threshold float32) VectorSearch
 
+	// WithScoreAggregation sets the strategy for aggregating scores when the same node
+	// appears in results from multiple queries or nodes (defaults to Sum)
+	WithScoreAggregation(kind ScoreAggregationKind) VectorSearch
+
 	// Execute the search and return the results
 	Execute() ([]VectorResult, error)
 }

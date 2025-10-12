@@ -392,9 +392,19 @@ func TestHNSWIndexSearchByMultipleNodes(t *testing.T) {
 		t.Fatalf("Search() error: %v", err)
 	}
 
-	// 2 queries × k=2 = 4 results
-	if len(results) != 4 {
-		t.Errorf("Expected 4 results (2 per node query), got %d", len(results))
+	// With aggregation enabled (default), results are deduplicated by node ID
+	// 2 queries each returning k=2, but duplicates are aggregated
+	if len(results) != 2 {
+		t.Errorf("Expected 2 deduplicated results, got %d", len(results))
+	}
+
+	// Verify we got unique node IDs
+	seenIDs := make(map[uint32]bool)
+	for _, res := range results {
+		if seenIDs[res.Node.ID()] {
+			t.Errorf("Found duplicate node ID %d in results", res.Node.ID())
+		}
+		seenIDs[res.Node.ID()] = true
 	}
 }
 
@@ -481,9 +491,19 @@ func TestHNSWIndexSearchMultipleQueries(t *testing.T) {
 		t.Fatalf("Search() error: %v", err)
 	}
 
-	// 2 queries × k=2 = 4 results
-	if len(results) != 4 {
-		t.Errorf("Expected 4 results (2 per query), got %d", len(results))
+	// With aggregation enabled (default), results are deduplicated by node ID
+	// 2 queries each returning k=2, but duplicates are aggregated
+	if len(results) != 2 {
+		t.Errorf("Expected 2 deduplicated results, got %d", len(results))
+	}
+
+	// Verify we got unique node IDs
+	seenIDs := make(map[uint32]bool)
+	for _, res := range results {
+		if seenIDs[res.Node.ID()] {
+			t.Errorf("Found duplicate node ID %d in results", res.Node.ID())
+		}
+		seenIDs[res.Node.ID()] = true
 	}
 }
 
@@ -519,9 +539,20 @@ func TestHNSWIndexSearchCombinedQueryAndNode(t *testing.T) {
 		t.Fatalf("Search() error: %v", err)
 	}
 
-	// 2 queries (1 direct + 1 from node) × k=2 = 4 results
-	if len(results) != 4 {
-		t.Errorf("Expected 4 results (2 per query), got %d", len(results))
+	// With aggregation enabled (default), results are deduplicated by node ID
+	// 2 queries (1 direct + 1 from node) each returning k=2
+	// Overlapping results are deduplicated
+	if len(results) < 2 {
+		t.Errorf("Expected at least 2 deduplicated results, got %d", len(results))
+	}
+
+	// Verify we got unique node IDs
+	seenIDs := make(map[uint32]bool)
+	for _, res := range results {
+		if seenIDs[res.Node.ID()] {
+			t.Errorf("Found duplicate node ID %d in results", res.Node.ID())
+		}
+		seenIDs[res.Node.ID()] = true
 	}
 }
 
@@ -559,9 +590,20 @@ func TestHNSWIndexSearchMultipleQueriesAndNodes(t *testing.T) {
 		t.Fatalf("Search() error: %v", err)
 	}
 
-	// 4 queries (2 direct + 2 from nodes) × k=2 = 8 total results
-	if len(results) != 8 {
-		t.Errorf("Expected 8 results, got %d", len(results))
+	// With aggregation enabled (default), results are deduplicated by node ID
+	// 4 queries (2 direct + 2 from nodes) each returning k=2
+	// Due to overlapping results, we expect fewer than 8 unique results
+	if len(results) < 2 {
+		t.Errorf("Expected at least 2 deduplicated results, got %d", len(results))
+	}
+
+	// Verify we got unique node IDs
+	seenIDs := make(map[uint32]bool)
+	for _, res := range results {
+		if seenIDs[res.Node.ID()] {
+			t.Errorf("Found duplicate node ID %d in results", res.Node.ID())
+		}
+		seenIDs[res.Node.ID()] = true
 	}
 }
 

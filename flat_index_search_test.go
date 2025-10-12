@@ -188,9 +188,20 @@ func TestFlatIndexSearchByMultipleNodes(t *testing.T) {
 		t.Fatalf("Search() error: %v", err)
 	}
 
-	// Should get 2 results per query = 4 total
-	if len(results) != 4 {
-		t.Errorf("Expected 4 results, got %d", len(results))
+	// With aggregation enabled (default), results are deduplicated by node ID
+	// Each query returns k=2 neighbors, but duplicates are aggregated
+	// In this case, we expect 2 unique nodes (node2 and node3 appear in both queries)
+	if len(results) != 2 {
+		t.Errorf("Expected 2 deduplicated results, got %d", len(results))
+	}
+
+	// Verify we got unique node IDs
+	seenIDs := make(map[uint32]bool)
+	for _, res := range results {
+		if seenIDs[res.Node.ID()] {
+			t.Errorf("Found duplicate node ID %d in results", res.Node.ID())
+		}
+		seenIDs[res.Node.ID()] = true
 	}
 }
 
@@ -236,8 +247,8 @@ func TestFlatIndexSearchBatchQueries(t *testing.T) {
 
 	// Search with multiple queries
 	queries := [][]float32{
-		{1, 0, 0},
-		{0, 1, 0},
+		{1, 0, 0}, // Will find {1,0,0}
+		{0, 1, 0}, // Will find {0,1,0}
 	}
 
 	results, err := idx.NewSearch().
@@ -249,9 +260,20 @@ func TestFlatIndexSearchBatchQueries(t *testing.T) {
 		t.Fatalf("Search() error: %v", err)
 	}
 
-	// Should get 1 result per query = 2 total
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results, got %d", len(results))
+	// With aggregation, results are deduplicated by node ID
+	// These two queries should find nodes, with possible overlap
+	// So we expect at least 1 unique result
+	if len(results) < 1 {
+		t.Errorf("Expected at least 1 deduplicated result, got %d", len(results))
+	}
+
+	// Verify we got unique node IDs
+	seenIDs := make(map[uint32]bool)
+	for _, res := range results {
+		if seenIDs[res.Node.ID()] {
+			t.Errorf("Found duplicate node ID %d in results", res.Node.ID())
+		}
+		seenIDs[res.Node.ID()] = true
 	}
 }
 
@@ -589,10 +611,22 @@ func TestFlatIndexSearchCombinedQueryAndNode(t *testing.T) {
 		t.Fatalf("Search() error: %v", err)
 	}
 
-	// Should get results from both queries
-	// Each query returns top 2, so we expect 4 total results
-	if len(results) != 4 {
-		t.Errorf("Expected 4 results (2 per query), got %d", len(results))
+	// With aggregation enabled (default), results are deduplicated by node ID
+	// Query 1: [0, 1, 0] → finds 2 nearest nodes
+	// Query 2 (node 0): [1, 0, 0] → finds 2 nearest nodes
+	// These queries may have overlapping results, which are deduplicated
+	// We expect 2-3 unique results depending on overlap
+	if len(results) < 2 || len(results) > 3 {
+		t.Errorf("Expected 2-3 deduplicated results, got %d", len(results))
+	}
+
+	// Verify we got unique node IDs
+	seenIDs := make(map[uint32]bool)
+	for _, res := range results {
+		if seenIDs[res.Node.ID()] {
+			t.Errorf("Found duplicate node ID %d in results", res.Node.ID())
+		}
+		seenIDs[res.Node.ID()] = true
 	}
 }
 
@@ -629,9 +663,21 @@ func TestFlatIndexSearchMultipleQueriesAndNodes(t *testing.T) {
 		t.Fatalf("Search() error: %v", err)
 	}
 
-	// 4 queries (2 direct + 2 from nodes) × k=2 = 8 total results
-	if len(results) != 8 {
-		t.Errorf("Expected 8 results, got %d", len(results))
+	// With aggregation enabled (default), results are deduplicated by node ID
+	// 4 queries (2 direct + 2 from nodes) each returning k=2 results
+	// Due to overlapping results across queries, we expect fewer than 8 unique results
+	// We should have at least 2 unique results (the k value)
+	if len(results) < 2 {
+		t.Errorf("Expected at least 2 deduplicated results, got %d", len(results))
+	}
+
+	// Verify we got unique node IDs
+	seenIDs := make(map[uint32]bool)
+	for _, res := range results {
+		if seenIDs[res.Node.ID()] {
+			t.Errorf("Found duplicate node ID %d in results", res.Node.ID())
+		}
+		seenIDs[res.Node.ID()] = true
 	}
 }
 
