@@ -19,6 +19,7 @@ type pqIndexSearch struct {
 	index           *PQIndex
 	queries         [][]float32
 	nodeIDs         []uint32
+	documentIDs     []uint32
 	k               int
 	threshold       float32
 	aggregationKind ScoreAggregationKind
@@ -77,6 +78,14 @@ func (s *pqIndexSearch) WithScoreAggregation(kind ScoreAggregationKind) VectorSe
 // A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
 func (s *pqIndexSearch) WithCutoff(cutoff int) VectorSearch {
 	s.cutoff = cutoff
+	return s
+}
+
+// WithDocumentIDs sets the eligible document IDs for pre-filtering.
+// Only vectors with IDs in this set will be considered as candidates.
+// If empty, all documents are eligible (default behavior).
+func (s *pqIndexSearch) WithDocumentIDs(docIDs ...uint32) VectorSearch {
+	s.documentIDs = docIDs
 	return s
 }
 
@@ -237,6 +246,10 @@ func (s *pqIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, erro
 		}
 	}
 
+	// Create document filter for metadata pre-filtering
+	docFilter := NewDocumentFilter(s.documentIDs)
+	defer ReturnDocumentFilter(docFilter)
+
 	// Compute approximate distances using table lookups
 	type result struct {
 		vector   VectorNode
@@ -245,6 +258,11 @@ func (s *pqIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, erro
 	results := make([]result, 0, len(s.index.codes))
 
 	for i, code := range s.index.codes {
+		// Apply document ID filter if set (metadata pre-filtering)
+		if docFilter.ShouldSkip(s.index.vectorNodes[i].ID()) {
+			continue
+		}
+
 		// Sum squared distances across subspaces
 		dist := float32(0)
 		for m := 0; m < s.index.M; m++ {

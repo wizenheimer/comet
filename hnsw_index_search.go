@@ -52,6 +52,7 @@ type hnswIndexSearch struct {
 	index           *HNSWIndex
 	queries         [][]float32
 	nodeIDs         []uint32
+	documentIDs     []uint32
 	k               int
 	efSearch        int // Per-search override, 0 means use index default
 	threshold       float32
@@ -117,6 +118,14 @@ func (s *hnswIndexSearch) WithScoreAggregation(kind ScoreAggregationKind) Vector
 // A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
 func (s *hnswIndexSearch) WithCutoff(cutoff int) VectorSearch {
 	s.cutoff = cutoff
+	return s
+}
+
+// WithDocumentIDs sets the eligible document IDs for pre-filtering.
+// Only vectors with IDs in this set will be considered as candidates.
+// If empty, all documents are eligible (default behavior).
+func (s *hnswIndexSearch) WithDocumentIDs(docIDs ...uint32) VectorSearch {
+	s.documentIDs = docIDs
 	return s
 }
 
@@ -283,6 +292,10 @@ func (s *hnswIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, er
 	}
 	candidates := s.index.searchLayer(preprocessedQuery, curr, efSearch, 0)
 
+	// Create document filter for metadata pre-filtering
+	docFilter := NewDocumentFilter(s.documentIDs)
+	defer ReturnDocumentFilter(docFilter)
+
 	// ═══════════════════════════════════════════════════════════════════════
 	// PHASE 3: RETURN TOP K
 	// ═══════════════════════════════════════════════════════════════════════
@@ -293,6 +306,11 @@ func (s *hnswIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, er
 	results := make([]result, 0, len(candidates))
 
 	for _, c := range candidates {
+		// Apply document ID filter if set (metadata pre-filtering)
+		if docFilter.ShouldSkip(c.id) {
+			continue
+		}
+
 		if s.threshold > 0 && c.distance > s.threshold {
 			continue
 		}

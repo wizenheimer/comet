@@ -18,6 +18,7 @@ type ivfIndexSearch struct {
 	index           *IVFIndex
 	queries         [][]float32
 	nodeIDs         []uint32
+	documentIDs     []uint32
 	k               int
 	nprobes         int
 	threshold       float32
@@ -80,6 +81,14 @@ func (s *ivfIndexSearch) WithScoreAggregation(kind ScoreAggregationKind) VectorS
 // A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
 func (s *ivfIndexSearch) WithCutoff(cutoff int) VectorSearch {
 	s.cutoff = cutoff
+	return s
+}
+
+// WithDocumentIDs sets the eligible document IDs for pre-filtering.
+// Only vectors with IDs in this set will be considered as candidates.
+// If empty, all documents are eligible (default behavior).
+func (s *ivfIndexSearch) WithDocumentIDs(docIDs ...uint32) VectorSearch {
+	s.documentIDs = docIDs
 	return s
 }
 
@@ -237,6 +246,10 @@ func (s *ivfIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, err
 	// ═══════════════════════════════════════════════════════════════════════════
 	// STEP 2: Collect candidates from nprobes nearest lists
 	// ═══════════════════════════════════════════════════════════════════════════
+	// Create document filter for metadata pre-filtering
+	docFilter := NewDocumentFilter(s.documentIDs)
+	defer ReturnDocumentFilter(docFilter)
+
 	type candidate struct {
 		vector   VectorNode
 		distance float32
@@ -249,6 +262,11 @@ func (s *ivfIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, err
 
 		// Search all vectors in this inverted list
 		for _, v := range s.index.lists[listIdx] {
+			// Apply document ID filter if set (metadata pre-filtering)
+			if docFilter.ShouldSkip(v.ID()) {
+				continue
+			}
+
 			dist := s.index.distance.Calculate(preprocessedQuery, v.Vector())
 
 			// Apply threshold filter if set

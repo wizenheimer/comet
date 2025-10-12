@@ -19,6 +19,7 @@ type ivfpqIndexSearch struct {
 	index           *IVFPQIndex
 	queries         [][]float32
 	nodeIDs         []uint32
+	documentIDs     []uint32
 	k               int
 	nprobes         int
 	threshold       float32
@@ -81,6 +82,14 @@ func (s *ivfpqIndexSearch) WithScoreAggregation(kind ScoreAggregationKind) Vecto
 // A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
 func (s *ivfpqIndexSearch) WithCutoff(cutoff int) VectorSearch {
 	s.cutoff = cutoff
+	return s
+}
+
+// WithDocumentIDs sets the eligible document IDs for pre-filtering.
+// Only vectors with IDs in this set will be considered as candidates.
+// If empty, all documents are eligible (default behavior).
+func (s *ivfpqIndexSearch) WithDocumentIDs(docIDs ...uint32) VectorSearch {
+	s.documentIDs = docIDs
 	return s
 }
 
@@ -246,6 +255,10 @@ func (s *ivfpqIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, e
 	})
 
 	// STEP 2: Search in nprobe nearest clusters
+	// Create document filter for metadata pre-filtering
+	docFilter := NewDocumentFilter(s.documentIDs)
+	defer ReturnDocumentFilter(docFilter)
+
 	type result struct {
 		vector   VectorNode
 		distance float32
@@ -267,6 +280,11 @@ func (s *ivfpqIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, e
 
 		// Compute distances for all vectors in this list
 		for _, cv := range s.index.lists[listIdx] {
+			// Apply document ID filter if set (metadata pre-filtering)
+			if docFilter.ShouldSkip(cv.Node.ID()) {
+				continue
+			}
+
 			// Asymmetric distance using table lookups
 			dist := s.asymmetricDistance(distTables, cv.Code)
 

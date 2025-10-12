@@ -18,6 +18,7 @@ type flatIndexSearch struct {
 	index           *FlatIndex
 	queries         [][]float32
 	nodeIDs         []uint32
+	documentIDs     []uint32
 	k               int
 	threshold       float32
 	aggregationKind ScoreAggregationKind
@@ -75,6 +76,14 @@ func (s *flatIndexSearch) WithScoreAggregation(kind ScoreAggregationKind) Vector
 // A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
 func (s *flatIndexSearch) WithCutoff(cutoff int) VectorSearch {
 	s.cutoff = cutoff
+	return s
+}
+
+// WithDocumentIDs sets the eligible document IDs for pre-filtering.
+// Only vectors with IDs in this set will be considered as candidates.
+// If empty, all documents are eligible (default behavior).
+func (s *flatIndexSearch) WithDocumentIDs(docIDs ...uint32) VectorSearch {
+	s.documentIDs = docIDs
 	return s
 }
 
@@ -174,14 +183,20 @@ func (s *flatIndexSearch) lookupNodeVectors() ([][]float32, error) {
 // EXHAUSTIVE SEARCH ALGORITHM:
 //  1. Preprocess the query vector (normalize for cosine, no-op for euclidean)
 //  2. Calculate distance from preprocessed query to EVERY preprocessed vector in the index
-//  3. Filter by threshold if set
-//  4. Sort all results by distance (ascending - smaller is more similar)
-//  5. Return top k results
+//  3. Filter by document IDs if provided (metadata pre-filtering)
+//  4. Filter by threshold if set
+//  5. Sort all results by distance (ascending - smaller is more similar)
+//  6. Return top k results
 //
 // OPTIMIZATION FOR COSINE DISTANCE:
 // Since both query and stored vectors are normalized during preprocessing,
 // the distance calculation is optimized to: 1 - dot(query, vector)
 // This eliminates the need for norm calculations and divisions during search.
+//
+// METADATA PRE-FILTERING:
+// If documentIDs are provided via WithDocumentIDs(), only vectors with matching IDs
+// are considered as candidates. This enables efficient metadata-based filtering before
+// expensive vector similarity calculations.
 //
 // Time Complexity: O(n × dim + n × log(n)) where:
 //   - n is the number of vectors
@@ -206,6 +221,10 @@ func (s *flatIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, er
 		return nil, err
 	}
 
+	// Create document filter for metadata pre-filtering
+	docFilter := NewDocumentFilter(s.documentIDs)
+	defer ReturnDocumentFilter(docFilter)
+
 	// Calculate distances to all vectors
 	// Since all stored vectors are already preprocessed, and we've preprocessed the query,
 	// the distance calculation is now optimized (especially for cosine where it's just dot product)
@@ -216,6 +235,11 @@ func (s *flatIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, er
 	results := make([]result, 0, len(s.index.vectors))
 
 	for _, v := range s.index.vectors {
+		// Apply document ID filter if set (metadata pre-filtering)
+		if docFilter.ShouldSkip(v.ID()) {
+			continue
+		}
+
 		// Calculate distance using preprocessed query and preprocessed stored vector
 		dist := s.index.distance.Calculate(preprocessedQuery, v.Vector())
 

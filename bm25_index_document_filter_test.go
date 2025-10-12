@@ -393,4 +393,3 @@ func TestBM25Index_WithDocumentIDs_NonExistentDocuments(t *testing.T) {
 		t.Errorf("Expected document 1, got document %d", results[0].Id)
 	}
 }
-
