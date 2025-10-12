@@ -4,6 +4,16 @@ import (
 	"math"
 )
 
+const (
+	// UnassignedCluster indicates a vector hasn't been assigned to any cluster yet
+	UnassignedCluster = -1
+)
+
+var (
+	// DefaultMaxIter is the default maximum number of iterations for k-means clustering.
+	DefaultMaxIter = 20
+)
+
 // KMeans performs k-means clustering to learn cluster centroids.
 //
 // # K-MEANS CLUSTERING ALGORITHM
@@ -48,102 +58,7 @@ import (
 //   - [][]float32: k learned centroids that define the clusters
 //   - []int: cluster assignments for each input vector (vector i -> cluster assignments[i])
 func KMeans(vectors [][]float32, k int, distance Distance, maxIter int) (centroids [][]float32, vectorToClusterMapping []int) {
-	// Validate inputs
-	if len(vectors) == 0 || k <= 0 || k > len(vectors) {
-		return nil, nil
-	}
-
-	dimensions := len(vectors[0])
-
-	// ═══════════════════════════════════════════════════════════════════════════
-	// STEP 1: INITIALIZE CENTROIDS
-	// ═══════════════════════════════════════════════════════════════════════════
-	// Use uniform spacing: pick every (n/k)-th vector as initial centroid
-	centroids = make([][]float32, k)
-	samplingStep := len(vectors) / k
-
-	for clusterIdx := 0; clusterIdx < k; clusterIdx++ {
-		vectorIdx := clusterIdx * samplingStep
-		if vectorIdx >= len(vectors) {
-			vectorIdx = len(vectors) - 1
-		}
-
-		// Copy the vector data (don't modify original)
-		centroids[clusterIdx] = make([]float32, dimensions)
-		copy(centroids[clusterIdx], vectors[vectorIdx])
-	}
-
-	// Initialize mapping: vectorToClusterMapping[i] = which cluster vector i belongs to
-	// Start with -1 to indicate unassigned
-	vectorToClusterMapping = make([]int, len(vectors))
-	for i := range vectorToClusterMapping {
-		vectorToClusterMapping[i] = -1
-	}
-
-	// ═══════════════════════════════════════════════════════════════════════════
-	// STEP 2-4: ITERATE UNTIL CONVERGENCE
-	// ═══════════════════════════════════════════════════════════════════════════
-	for iteration := 0; iteration < maxIter; iteration++ {
-		// ───────────────────────────────────────────────────────────────────────
-		// ASSIGNMENT STEP: Assign each vector to its nearest centroid
-		// ───────────────────────────────────────────────────────────────────────
-		assignmentsChanged := false
-
-		for vectorIdx, vector := range vectors {
-			// Find nearest centroid for this vector
-			nearestDistance := float32(math.Inf(1))
-			nearestCluster := 0
-
-			for clusterIdx, centroid := range centroids {
-				dist := distance.Calculate(vector, centroid)
-				if dist < nearestDistance {
-					nearestDistance = dist
-					nearestCluster = clusterIdx
-				}
-			}
-
-			// Check if assignment changed from previous iteration
-			if vectorToClusterMapping[vectorIdx] != nearestCluster {
-				assignmentsChanged = true
-				vectorToClusterMapping[vectorIdx] = nearestCluster
-			}
-		}
-
-		// ───────────────────────────────────────────────────────────────────────
-		// CONVERGENCE CHECK: If no assignments changed, we're done!
-		// ───────────────────────────────────────────────────────────────────────
-		if !assignmentsChanged {
-			break // Converged - clustering is stable
-		}
-
-		// ───────────────────────────────────────────────────────────────────────
-		// UPDATE STEP: Recompute centroids as mean of assigned vectors
-		// ───────────────────────────────────────────────────────────────────────
-		for clusterIdx := range centroids {
-			// Compute sum of all vectors assigned to this centroid
-			componentSum := make([]float32, dimensions)
-			clusterSize := 0
-
-			for vectorIdx, assignedCluster := range vectorToClusterMapping {
-				if assignedCluster == clusterIdx {
-					for dimIdx := range componentSum {
-						componentSum[dimIdx] += vectors[vectorIdx][dimIdx]
-					}
-					clusterSize++
-				}
-			}
-
-			// Compute mean: centroid = sum / count
-			if clusterSize > 0 {
-				for dimIdx := range componentSum {
-					centroids[clusterIdx][dimIdx] = componentSum[dimIdx] / float32(clusterSize)
-				}
-			}
-			// Note: If clusterSize==0 (rare), we keep the old centroid position
-		}
-	}
-
-	return centroids, vectorToClusterMapping
+	return kmeansInternal(vectors, k, distance, maxIter)
 }
 
 // KMeansSubspace performs k-means clustering on subspace vectors for codebook learning.
@@ -195,9 +110,32 @@ func KMeans(vectors [][]float32, k int, distance Distance, maxIter int) (centroi
 //   - [][]float32: k learned centroids for this subspace (the codebook)
 //   - []int: cluster assignments for each input subvector
 func KMeansSubspace(vectors [][]float32, k int, maxIter int) (centroids [][]float32, vectorToClusterMapping []int) {
-	// Validate inputs
-	if len(vectors) == 0 || k <= 0 || k > len(vectors) {
+	dist, _ := NewDistance(L2Squared)
+	return kmeansInternal(vectors, k, dist, maxIter)
+}
+
+// kmeansInternal is the shared implementation for both KMeans and KMeansSubspace.
+// This eliminates code duplication and ensures consistent behavior.
+func kmeansInternal(vectors [][]float32, k int, distance Distance, maxIter int) (centroids [][]float32, vectorToClusterMapping []int) {
+	// ═══════════════════════════════════════════════════════════════════════════
+	// INPUT VALIDATION
+	// ═══════════════════════════════════════════════════════════════════════════
+	if len(vectors) == 0 {
 		return nil, nil
+	}
+
+	if k <= 0 {
+		return nil, nil
+	}
+
+	// Auto-adjust k if it's larger than the number of vectors
+	if k > len(vectors) {
+		k = len(vectors)
+	}
+
+	// Set default maxIter if invalid
+	if maxIter <= 0 {
+		maxIter = DefaultMaxIter
 	}
 
 	dimensions := len(vectors[0])
@@ -208,6 +146,9 @@ func KMeansSubspace(vectors [][]float32, k int, maxIter int) (centroids [][]floa
 	// Use uniform spacing: pick every (n/k)-th vector as initial centroid
 	centroids = make([][]float32, k)
 	samplingStep := len(vectors) / k
+	if samplingStep == 0 {
+		samplingStep = 1
+	}
 
 	for clusterIdx := 0; clusterIdx < k; clusterIdx++ {
 		vectorIdx := clusterIdx * samplingStep
@@ -215,16 +156,16 @@ func KMeansSubspace(vectors [][]float32, k int, maxIter int) (centroids [][]floa
 			vectorIdx = len(vectors) - 1
 		}
 
-		// Copy vector data to create centroid
+		// Copy the vector data (don't modify original)
 		centroids[clusterIdx] = make([]float32, dimensions)
 		copy(centroids[clusterIdx], vectors[vectorIdx])
 	}
 
 	// Initialize mapping: vectorToClusterMapping[i] = which cluster vector i belongs to
-	// Start with -1 to indicate unassigned
+	// Start with UnassignedCluster to indicate unassigned
 	vectorToClusterMapping = make([]int, len(vectors))
 	for i := range vectorToClusterMapping {
-		vectorToClusterMapping[i] = -1
+		vectorToClusterMapping[i] = UnassignedCluster
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════════
@@ -232,24 +173,24 @@ func KMeansSubspace(vectors [][]float32, k int, maxIter int) (centroids [][]floa
 	// ═══════════════════════════════════════════════════════════════════════════
 	for iteration := 0; iteration < maxIter; iteration++ {
 		// ───────────────────────────────────────────────────────────────────────
-		// ASSIGNMENT STEP: Assign each subvector to nearest centroid
+		// ASSIGNMENT STEP: Assign each vector to its nearest centroid
 		// ───────────────────────────────────────────────────────────────────────
 		assignmentsChanged := false
 
 		for vectorIdx, vector := range vectors {
-			// Find nearest centroid using squared L2 distance
+			// Find nearest centroid for this vector
 			nearestDistance := float32(math.Inf(1))
 			nearestCluster := 0
 
 			for clusterIdx, centroid := range centroids {
-				dist := l2DistanceSquared(vector, centroid)
+				dist := distance.Calculate(vector, centroid)
 				if dist < nearestDistance {
 					nearestDistance = dist
 					nearestCluster = clusterIdx
 				}
 			}
 
-			// Track if any assignments changed
+			// Check if assignment changed from previous iteration
 			if vectorToClusterMapping[vectorIdx] != nearestCluster {
 				assignmentsChanged = true
 				vectorToClusterMapping[vectorIdx] = nearestCluster
@@ -260,33 +201,41 @@ func KMeansSubspace(vectors [][]float32, k int, maxIter int) (centroids [][]floa
 		// CONVERGENCE CHECK: If no assignments changed, we're done!
 		// ───────────────────────────────────────────────────────────────────────
 		if !assignmentsChanged {
-			break // Converged - clusters are stable
+			break // Converged - clustering is stable
 		}
 
 		// ───────────────────────────────────────────────────────────────────────
-		// UPDATE STEP: Recompute centroids as mean of assigned subvectors
+		// UPDATE STEP: Recompute centroids as mean of assigned vectors
+		// OPTIMIZED: Single pass through vectors instead of k passes
 		// ───────────────────────────────────────────────────────────────────────
+
+		// Initialize accumulators
+		clusterSums := make([][]float32, k)
+		clusterSizes := make([]int, k)
+		for i := range clusterSums {
+			clusterSums[i] = make([]float32, dimensions)
+		}
+
+		// Single pass: accumulate sums for each cluster - O(n × dim)
+		for vectorIdx, assignedCluster := range vectorToClusterMapping {
+			if assignedCluster != UnassignedCluster {
+				for dimIdx := range vectors[vectorIdx] {
+					clusterSums[assignedCluster][dimIdx] += vectors[vectorIdx][dimIdx]
+				}
+				clusterSizes[assignedCluster]++
+			}
+		}
+
+		// Compute means: centroid = sum / count - O(k × dim)
 		for clusterIdx := range centroids {
-			componentSum := make([]float32, dimensions)
-			clusterSize := 0
-
-			// Sum all subvectors assigned to this centroid
-			for vectorIdx, assignedCluster := range vectorToClusterMapping {
-				if assignedCluster == clusterIdx {
-					for dimIdx := range componentSum {
-						componentSum[dimIdx] += vectors[vectorIdx][dimIdx]
-					}
-					clusterSize++
+			if clusterSizes[clusterIdx] > 0 {
+				for dimIdx := range centroids[clusterIdx] {
+					centroids[clusterIdx][dimIdx] = clusterSums[clusterIdx][dimIdx] / float32(clusterSizes[clusterIdx])
 				}
 			}
-
-			// Compute mean: new centroid = sum / count
-			if clusterSize > 0 {
-				for dimIdx := range componentSum {
-					centroids[clusterIdx][dimIdx] = componentSum[dimIdx] / float32(clusterSize)
-				}
-			}
-			// Note: If clusterSize==0 (rare), we keep the old centroid position
+			// Note: If clusterSize==0 (empty cluster), we keep the old centroid position
+			// This is rare but can happen. The centroid will potentially attract vectors
+			// in the next iteration if it's positioned between other clusters.
 		}
 	}
 

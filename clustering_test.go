@@ -5,487 +5,642 @@ import (
 	"testing"
 )
 
-func TestKMeans(t *testing.T) {
-	// Create simple 2D test data with clear clusters
+// TestKMeansBasic tests basic k-means clustering functionality
+func TestKMeansBasic(t *testing.T) {
+	// Create simple 2D vectors that naturally form 2 clusters
 	vectors := [][]float32{
-		// Cluster 1: around (0, 0)
-		{0, 0},
-		{0.1, 0.1},
-		{-0.1, 0.1},
-		{0.1, -0.1},
-		// Cluster 2: around (5, 5)
-		{5, 5},
-		{5.1, 5.1},
-		{4.9, 5.1},
-		{5.1, 4.9},
-		// Cluster 3: around (10, 0)
-		{10, 0},
-		{10.1, 0.1},
-		{9.9, 0.1},
-		{10.1, -0.1},
+		{0.0, 0.0},
+		{1.0, 1.0},
+		{0.5, 0.5},
+		{10.0, 10.0},
+		{11.0, 11.0},
+		{10.5, 10.5},
 	}
 
-	dist, _ := NewDistance(Euclidean)
-	centroids, assignments := KMeans(vectors, 3, dist, 20)
+	dist, _ := NewDistance(L2Squared)
+	centroids, assignments := KMeans(vectors, 2, dist, DefaultMaxIter)
 
-	// Check that we got 3 centroids
-	if len(centroids) != 3 {
-		t.Errorf("Expected 3 centroids, got %d", len(centroids))
+	// Verify we got 2 centroids
+	if len(centroids) != 2 {
+		t.Errorf("KMeans() returned %d centroids, want 2", len(centroids))
 	}
 
-	// Check that all vectors have assignments
+	// Verify all vectors are assigned
 	if len(assignments) != len(vectors) {
-		t.Errorf("Expected %d assignments, got %d", len(vectors), len(assignments))
+		t.Errorf("KMeans() returned %d assignments, want %d", len(assignments), len(vectors))
 	}
 
-	// Check that assignments are valid (0, 1, or 2)
-	for i, a := range assignments {
-		if a < 0 || a >= 3 {
-			t.Errorf("Invalid assignment %d for vector %d", a, i)
+	// Verify assignments are valid cluster IDs
+	for i, assignment := range assignments {
+		if assignment < 0 || assignment >= 2 {
+			t.Errorf("assignments[%d] = %d, want value in range [0,1]", i, assignment)
 		}
 	}
 
-	// Verify that vectors in the same cluster have the same assignment
-	// Vectors 0-3 should be in the same cluster
-	cluster1 := assignments[0]
-	for i := 1; i < 4; i++ {
-		if assignments[i] != cluster1 {
-			t.Errorf("Vectors 0-%d should be in the same cluster", i)
-		}
+	// Verify the first 3 vectors are in the same cluster
+	if assignments[0] != assignments[1] || assignments[1] != assignments[2] {
+		t.Errorf("First 3 vectors should be in same cluster, got assignments: %v, %v, %v",
+			assignments[0], assignments[1], assignments[2])
 	}
 
-	// Vectors 4-7 should be in the same cluster
-	cluster2 := assignments[4]
-	for i := 5; i < 8; i++ {
-		if assignments[i] != cluster2 {
-			t.Errorf("Vectors 4-%d should be in the same cluster", i)
-		}
+	// Verify the last 3 vectors are in the same cluster
+	if assignments[3] != assignments[4] || assignments[4] != assignments[5] {
+		t.Errorf("Last 3 vectors should be in same cluster, got assignments: %v, %v, %v",
+			assignments[3], assignments[4], assignments[5])
 	}
 
-	// Vectors 8-11 should be in the same cluster
-	cluster3 := assignments[8]
-	for i := 9; i < 12; i++ {
-		if assignments[i] != cluster3 {
-			t.Errorf("Vectors 8-%d should be in the same cluster", i)
-		}
-	}
-
-	// Check that the three clusters are different
-	if cluster1 == cluster2 || cluster1 == cluster3 || cluster2 == cluster3 {
-		t.Error("The three clusters should have different assignments")
+	// Verify the two groups are in different clusters
+	if assignments[0] == assignments[3] {
+		t.Errorf("First and last groups should be in different clusters")
 	}
 }
 
-func TestKMeansWithCosineDistance(t *testing.T) {
-	// Create vectors that are similar in direction but different magnitudes
-	vectors := [][]float32{
-		// Cluster 1: direction (1, 0)
-		{1, 0},
-		{2, 0.1},
-		{3, -0.1},
-		// Cluster 2: direction (0, 1)
-		{0, 1},
-		{0.1, 2},
-		{-0.1, 3},
-	}
-
-	dist, _ := NewDistance(Cosine)
-	centroids, assignments := KMeans(vectors, 2, dist, 20)
-
-	// Check that we got 2 centroids
-	if len(centroids) != 2 {
-		t.Errorf("Expected 2 centroids, got %d", len(centroids))
-	}
-
-	// Vectors 0-2 should be in the same cluster (similar direction)
-	cluster1 := assignments[0]
-	for i := 1; i < 3; i++ {
-		if assignments[i] != cluster1 {
-			t.Errorf("Vectors 0-%d should be in the same cluster (similar direction)", i)
-		}
-	}
-
-	// Vectors 3-5 should be in the same cluster
-	cluster2 := assignments[3]
-	for i := 4; i < 6; i++ {
-		if assignments[i] != cluster2 {
-			t.Errorf("Vectors 3-%d should be in the same cluster", i)
-		}
-	}
-
-	// The two clusters should be different
-	if cluster1 == cluster2 {
-		t.Error("The two clusters should have different assignments")
-	}
-}
-
-func TestKMeansSingleCluster(t *testing.T) {
-	vectors := [][]float32{
-		{1, 2, 3},
-		{4, 5, 6},
-		{7, 8, 9},
-	}
-
-	dist, _ := NewDistance(Euclidean)
-	centroids, assignments := KMeans(vectors, 1, dist, 20)
-
-	// Check that we got 1 centroid
-	if len(centroids) != 1 {
-		t.Errorf("Expected 1 centroid, got %d", len(centroids))
-	}
-
-	// All vectors should be assigned to cluster 0
-	for i, a := range assignments {
-		if a != 0 {
-			t.Errorf("Vector %d should be assigned to cluster 0, got %d", i, a)
-		}
-	}
-
-	// Centroid should be approximately the mean of all vectors
-	expectedCentroid := []float32{4, 5, 6}
-	for d := 0; d < 3; d++ {
-		if !almostEqual(centroids[0][d], expectedCentroid[d]) {
-			t.Errorf("Centroid[%d] = %f, want %f", d, centroids[0][d], expectedCentroid[d])
-		}
-	}
-}
-
-func TestKMeansIdenticalVectors(t *testing.T) {
-	// All vectors are identical
-	vectors := [][]float32{
-		{1, 2, 3},
-		{1, 2, 3},
-		{1, 2, 3},
-		{1, 2, 3},
-	}
-
-	dist, _ := NewDistance(Euclidean)
-	centroids, _ := KMeans(vectors, 2, dist, 20)
-
-	// Check that we got 2 centroids
-	if len(centroids) != 2 {
-		t.Errorf("Expected 2 centroids, got %d", len(centroids))
-	}
-
-	// All centroids should converge to the same location since all vectors are identical
-	expected := []float32{1, 2, 3}
-	for i := range centroids {
-		for d := 0; d < 3; d++ {
-			if !almostEqual(centroids[i][d], expected[d]) {
-				t.Errorf("Centroid %d dim %d = %f, want %f", i, d, centroids[i][d], expected[d])
-			}
-		}
-	}
-}
-
-func TestKMeansEmptyInput(t *testing.T) {
-	vectors := [][]float32{}
-	dist, _ := NewDistance(Euclidean)
-	centroids, assignments := KMeans(vectors, 3, dist, 20)
+// TestKMeansEmptyVectors tests k-means with empty input
+func TestKMeansEmptyVectors(t *testing.T) {
+	dist, _ := NewDistance(L2Squared)
+	centroids, assignments := KMeans([][]float32{}, 2, dist, DefaultMaxIter)
 
 	if centroids != nil {
-		t.Error("Expected nil centroids for empty input")
+		t.Errorf("KMeans() with empty vectors returned non-nil centroids: %v", centroids)
 	}
+
 	if assignments != nil {
-		t.Error("Expected nil assignments for empty input")
+		t.Errorf("KMeans() with empty vectors returned non-nil assignments: %v", assignments)
 	}
 }
 
+// TestKMeansInvalidK tests k-means with invalid k values
 func TestKMeansInvalidK(t *testing.T) {
 	vectors := [][]float32{
-		{1, 2, 3},
-		{4, 5, 6},
+		{1.0, 2.0},
+		{3.0, 4.0},
+	}
+	dist, _ := NewDistance(L2Squared)
+
+	tests := []struct {
+		name string
+		k    int
+	}{
+		{"zero k", 0},
+		{"negative k", -1},
 	}
 
-	dist, _ := NewDistance(Euclidean)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			centroids, assignments := KMeans(vectors, tt.k, dist, DefaultMaxIter)
 
-	// Test k = 0
-	centroids, assignments := KMeans(vectors, 0, dist, 20)
-	if centroids != nil || assignments != nil {
-		t.Error("Expected nil for k=0")
-	}
+			if centroids != nil {
+				t.Errorf("KMeans() with k=%d returned non-nil centroids", tt.k)
+			}
 
-	// Test k > len(vectors)
-	centroids, assignments = KMeans(vectors, 5, dist, 20)
-	if centroids != nil || assignments != nil {
-		t.Error("Expected nil for k > len(vectors)")
+			if assignments != nil {
+				t.Errorf("KMeans() with k=%d returned non-nil assignments", tt.k)
+			}
+		})
 	}
 }
 
-func TestKMeansConvergence(t *testing.T) {
-	// Create data where k-means should converge quickly
+// TestKMeansKGreaterThanN tests k-means when k > number of vectors
+func TestKMeansKGreaterThanN(t *testing.T) {
 	vectors := [][]float32{
-		{0, 0},
-		{0, 1},
-		{1, 0},
-		{10, 10},
-		{10, 11},
-		{11, 10},
+		{1.0, 2.0},
+		{3.0, 4.0},
+		{5.0, 6.0},
+	}
+	dist, _ := NewDistance(L2Squared)
+
+	// Request more clusters than vectors
+	centroids, assignments := KMeans(vectors, 10, dist, DefaultMaxIter)
+
+	// Should auto-adjust k to number of vectors
+	if len(centroids) != len(vectors) {
+		t.Errorf("KMeans() with k>n returned %d centroids, want %d", len(centroids), len(vectors))
 	}
 
-	dist, _ := NewDistance(Euclidean)
+	if len(assignments) != len(vectors) {
+		t.Errorf("KMeans() returned %d assignments, want %d", len(assignments), len(vectors))
+	}
 
-	// Run with limited iterations
-	centroids1, assignments1 := KMeans(vectors, 2, dist, 5)
+	// Each vector should be its own cluster
+	uniqueClusters := make(map[int]bool)
+	for _, assignment := range assignments {
+		uniqueClusters[assignment] = true
+	}
 
-	// Run with more iterations
-	centroids2, assignments2 := KMeans(vectors, 2, dist, 100)
+	if len(uniqueClusters) != len(vectors) {
+		t.Errorf("Expected %d unique clusters, got %d", len(vectors), len(uniqueClusters))
+	}
+}
 
-	// Assignments should be the same (converged within 5 iterations)
-	for i := range assignments1 {
-		if assignments1[i] != assignments2[i] {
-			t.Errorf("Assignments differ at index %d after more iterations", i)
+// TestKMeansInvalidMaxIter tests k-means with invalid maxIter
+func TestKMeansInvalidMaxIter(t *testing.T) {
+	vectors := [][]float32{
+		{0.0, 0.0},
+		{1.0, 1.0},
+		{10.0, 10.0},
+		{11.0, 11.0},
+	}
+	dist, _ := NewDistance(L2Squared)
+
+	tests := []struct {
+		name    string
+		maxIter int
+	}{
+		{"zero maxIter", 0},
+		{"negative maxIter", -5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			centroids, assignments := KMeans(vectors, 2, dist, tt.maxIter)
+
+			// Should use DefaultMaxIter and still work
+			if centroids == nil {
+				t.Errorf("KMeans() with maxIter=%d returned nil centroids", tt.maxIter)
+			}
+
+			if assignments == nil {
+				t.Errorf("KMeans() with maxIter=%d returned nil assignments", tt.maxIter)
+			}
+
+			if len(centroids) != 2 {
+				t.Errorf("KMeans() returned %d centroids, want 2", len(centroids))
+			}
+		})
+	}
+}
+
+// TestKMeansSingleVector tests k-means with a single vector
+func TestKMeansSingleVector(t *testing.T) {
+	vectors := [][]float32{
+		{1.0, 2.0, 3.0},
+	}
+	dist, _ := NewDistance(L2Squared)
+
+	centroids, assignments := KMeans(vectors, 1, dist, DefaultMaxIter)
+
+	if len(centroids) != 1 {
+		t.Errorf("KMeans() returned %d centroids, want 1", len(centroids))
+	}
+
+	if len(assignments) != 1 {
+		t.Errorf("KMeans() returned %d assignments, want 1", len(assignments))
+	}
+
+	if assignments[0] != 0 {
+		t.Errorf("assignments[0] = %d, want 0", assignments[0])
+	}
+
+	// Centroid should be equal to the single vector
+	for i := range centroids[0] {
+		if centroids[0][i] != vectors[0][i] {
+			t.Errorf("centroid[%d] = %f, want %f", i, centroids[0][i], vectors[0][i])
+		}
+	}
+}
+
+// TestKMeansConvergence tests that k-means converges properly
+func TestKMeansConvergence(t *testing.T) {
+	// Create 3 distinct clusters
+	vectors := [][]float32{
+		// Cluster 1 around (0, 0)
+		{0.0, 0.0},
+		{0.1, 0.1},
+		{-0.1, -0.1},
+		{0.2, -0.1},
+		// Cluster 2 around (5, 5)
+		{5.0, 5.0},
+		{5.1, 5.1},
+		{4.9, 4.9},
+		{5.2, 5.1},
+		// Cluster 3 around (10, 0)
+		{10.0, 0.0},
+		{10.1, 0.1},
+		{9.9, -0.1},
+		{10.2, 0.0},
+	}
+
+	dist, _ := NewDistance(L2Squared)
+	centroids, assignments := KMeans(vectors, 3, dist, 100)
+
+	if len(centroids) != 3 {
+		t.Errorf("KMeans() returned %d centroids, want 3", len(centroids))
+	}
+
+	// Verify each group is in its own cluster
+	// First 4 vectors should be in same cluster
+	cluster0 := assignments[0]
+	for i := 1; i < 4; i++ {
+		if assignments[i] != cluster0 {
+			t.Errorf("Vector %d should be in cluster %d, got %d", i, cluster0, assignments[i])
 		}
 	}
 
-	// Centroids should be approximately the same
-	for i := range centroids1 {
-		for d := range centroids1[i] {
-			if !almostEqual(centroids1[i][d], centroids2[i][d]) {
-				t.Errorf("Centroids differ after more iterations")
-				return
+	// Next 4 vectors should be in same cluster
+	cluster1 := assignments[4]
+	for i := 5; i < 8; i++ {
+		if assignments[i] != cluster1 {
+			t.Errorf("Vector %d should be in cluster %d, got %d", i, cluster1, assignments[i])
+		}
+	}
+
+	// Last 4 vectors should be in same cluster
+	cluster2 := assignments[8]
+	for i := 9; i < 12; i++ {
+		if assignments[i] != cluster2 {
+			t.Errorf("Vector %d should be in cluster %d, got %d", i, cluster2, assignments[i])
+		}
+	}
+
+	// All clusters should be different
+	if cluster0 == cluster1 || cluster1 == cluster2 || cluster0 == cluster2 {
+		t.Errorf("All clusters should be different, got: %d, %d, %d", cluster0, cluster1, cluster2)
+	}
+}
+
+// TestKMeansCentroidAccuracy tests that centroids are computed correctly
+func TestKMeansCentroidAccuracy(t *testing.T) {
+	// Create 2 clusters with known means
+	vectors := [][]float32{
+		{0.0, 0.0},
+		{2.0, 2.0}, // Mean of first cluster: (1, 1)
+		{10.0, 10.0},
+		{12.0, 12.0}, // Mean of second cluster: (11, 11)
+	}
+
+	dist, _ := NewDistance(L2Squared)
+	centroids, assignments := KMeans(vectors, 2, dist, DefaultMaxIter)
+
+	if len(centroids) != 2 {
+		t.Fatalf("KMeans() returned %d centroids, want 2", len(centroids))
+	}
+
+	// Determine which cluster is which based on first vector's assignment
+	cluster0Idx := assignments[0]
+	cluster1Idx := 1 - cluster0Idx
+
+	// Check cluster 0 centroid (should be around (1, 1))
+	expectedCentroid0 := []float32{1.0, 1.0}
+	for i := range expectedCentroid0 {
+		diff := math.Abs(float64(centroids[cluster0Idx][i] - expectedCentroid0[i]))
+		if diff > 0.01 {
+			t.Errorf("centroid[%d][%d] = %f, want ~%f (diff: %f)",
+				cluster0Idx, i, centroids[cluster0Idx][i], expectedCentroid0[i], diff)
+		}
+	}
+
+	// Check cluster 1 centroid (should be around (11, 11))
+	expectedCentroid1 := []float32{11.0, 11.0}
+	for i := range expectedCentroid1 {
+		diff := math.Abs(float64(centroids[cluster1Idx][i] - expectedCentroid1[i]))
+		if diff > 0.01 {
+			t.Errorf("centroid[%d][%d] = %f, want ~%f (diff: %f)",
+				cluster1Idx, i, centroids[cluster1Idx][i], expectedCentroid1[i], diff)
+		}
+	}
+}
+
+// TestKMeansWithDifferentDistances tests k-means with different distance metrics
+func TestKMeansWithDifferentDistances(t *testing.T) {
+	vectors := [][]float32{
+		{1.0, 0.0},
+		{0.9, 0.1},
+		{-1.0, 0.0},
+		{-0.9, -0.1},
+	}
+
+	tests := []struct {
+		name         string
+		distanceKind DistanceKind
+	}{
+		{"L2Squared", L2Squared},
+		{"Euclidean", Euclidean},
+		{"Cosine", Cosine},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dist, err := NewDistance(tt.distanceKind)
+			if err != nil {
+				t.Fatalf("NewDistance() error: %v", err)
+			}
+
+			centroids, assignments := KMeans(vectors, 2, dist, DefaultMaxIter)
+
+			if len(centroids) != 2 {
+				t.Errorf("KMeans() returned %d centroids, want 2", len(centroids))
+			}
+
+			if len(assignments) != len(vectors) {
+				t.Errorf("KMeans() returned %d assignments, want %d", len(assignments), len(vectors))
+			}
+
+			// Verify all assignments are valid
+			for i, assignment := range assignments {
+				if assignment < 0 || assignment >= 2 {
+					t.Errorf("assignments[%d] = %d, want value in range [0,1]", i, assignment)
+				}
+			}
+		})
+	}
+}
+
+// TestKMeansHighDimensional tests k-means with high-dimensional vectors
+func TestKMeansHighDimensional(t *testing.T) {
+	dim := 128
+	numVectors := 20
+	k := 4
+
+	// Create vectors
+	vectors := make([][]float32, numVectors)
+	for i := 0; i < numVectors; i++ {
+		vectors[i] = make([]float32, dim)
+		// Create distinct patterns for different clusters
+		clusterID := i % k
+		for j := 0; j < dim; j++ {
+			vectors[i][j] = float32(clusterID*10 + j%3)
+		}
+	}
+
+	dist, _ := NewDistance(L2Squared)
+	centroids, assignments := KMeans(vectors, k, dist, DefaultMaxIter)
+
+	if len(centroids) != k {
+		t.Errorf("KMeans() returned %d centroids, want %d", len(centroids), k)
+	}
+
+	if len(assignments) != numVectors {
+		t.Errorf("KMeans() returned %d assignments, want %d", len(assignments), numVectors)
+	}
+
+	// Verify centroid dimensions
+	for i, centroid := range centroids {
+		if len(centroid) != dim {
+			t.Errorf("centroid[%d] has dimension %d, want %d", i, len(centroid), dim)
+		}
+	}
+}
+
+// TestKMeansSubspace tests the KMeansSubspace function
+func TestKMeansSubspace(t *testing.T) {
+	// Create simple subspace vectors
+	vectors := [][]float32{
+		{0.0, 0.0},
+		{0.5, 0.5},
+		{1.0, 1.0},
+		{10.0, 10.0},
+		{10.5, 10.5},
+		{11.0, 11.0},
+	}
+
+	centroids, assignments := KMeansSubspace(vectors, 2, DefaultMaxIter)
+
+	// Verify we got 2 centroids
+	if len(centroids) != 2 {
+		t.Errorf("KMeansSubspace() returned %d centroids, want 2", len(centroids))
+	}
+
+	// Verify all vectors are assigned
+	if len(assignments) != len(vectors) {
+		t.Errorf("KMeansSubspace() returned %d assignments, want %d", len(assignments), len(vectors))
+	}
+
+	// Verify assignments are valid
+	for i, assignment := range assignments {
+		if assignment < 0 || assignment >= 2 {
+			t.Errorf("assignments[%d] = %d, want value in range [0,1]", i, assignment)
+		}
+	}
+
+	// Verify the first 3 vectors are in the same cluster
+	if assignments[0] != assignments[1] || assignments[1] != assignments[2] {
+		t.Errorf("First 3 vectors should be in same cluster")
+	}
+
+	// Verify the last 3 vectors are in the same cluster
+	if assignments[3] != assignments[4] || assignments[4] != assignments[5] {
+		t.Errorf("Last 3 vectors should be in same cluster")
+	}
+
+	// Verify the two groups are in different clusters
+	if assignments[0] == assignments[3] {
+		t.Errorf("First and last groups should be in different clusters")
+	}
+}
+
+// TestKMeansSubspaceEmptyVectors tests KMeansSubspace with empty input
+func TestKMeansSubspaceEmptyVectors(t *testing.T) {
+	centroids, assignments := KMeansSubspace([][]float32{}, 2, DefaultMaxIter)
+
+	if centroids != nil {
+		t.Errorf("KMeansSubspace() with empty vectors returned non-nil centroids")
+	}
+
+	if assignments != nil {
+		t.Errorf("KMeansSubspace() with empty vectors returned non-nil assignments")
+	}
+}
+
+// TestKMeansSubspaceTypicalCodebookSize tests with typical codebook size (256)
+func TestKMeansSubspaceTypicalCodebookSize(t *testing.T) {
+	// Simulate typical Product Quantization scenario
+	subspaceDim := 96 // 768/8
+	numVectors := 1000
+	k := 256 // 2^8 bits
+
+	vectors := make([][]float32, numVectors)
+	for i := 0; i < numVectors; i++ {
+		vectors[i] = make([]float32, subspaceDim)
+		for j := 0; j < subspaceDim; j++ {
+			vectors[i][j] = float32((i*j)%100) * 0.1
+		}
+	}
+
+	centroids, assignments := KMeansSubspace(vectors, k, 10)
+
+	if len(centroids) != k {
+		t.Errorf("KMeansSubspace() returned %d centroids, want %d", len(centroids), k)
+	}
+
+	if len(assignments) != numVectors {
+		t.Errorf("KMeansSubspace() returned %d assignments, want %d", len(assignments), numVectors)
+	}
+
+	// Verify all centroids have correct dimension
+	for i, centroid := range centroids {
+		if len(centroid) != subspaceDim {
+			t.Errorf("centroid[%d] has dimension %d, want %d", i, len(centroid), subspaceDim)
+		}
+	}
+
+	// Verify assignments are in valid range
+	for i, assignment := range assignments {
+		if assignment < 0 || assignment >= k {
+			t.Errorf("assignments[%d] = %d, want value in range [0,%d)", i, assignment, k)
+		}
+	}
+}
+
+// TestKMeansMaxIterLimit tests that k-means respects maxIter limit
+func TestKMeansMaxIterLimit(t *testing.T) {
+	// Create vectors that would take many iterations to converge
+	vectors := [][]float32{
+		{0.0, 0.0},
+		{1.0, 0.0},
+		{2.0, 0.0},
+		{3.0, 0.0},
+		{4.0, 0.0},
+		{5.0, 0.0},
+		{6.0, 0.0},
+		{7.0, 0.0},
+		{8.0, 0.0},
+		{9.0, 0.0},
+	}
+
+	dist, _ := NewDistance(L2Squared)
+
+	// With only 1 iteration, may not fully converge but should still return valid results
+	centroids, assignments := KMeans(vectors, 3, dist, 1)
+
+	if len(centroids) != 3 {
+		t.Errorf("KMeans() returned %d centroids, want 3", len(centroids))
+	}
+
+	if len(assignments) != len(vectors) {
+		t.Errorf("KMeans() returned %d assignments, want %d", len(assignments), len(vectors))
+	}
+
+	// Verify all assignments are valid even with limited iterations
+	for i, assignment := range assignments {
+		if assignment < 0 || assignment >= 3 {
+			t.Errorf("assignments[%d] = %d, want value in range [0,2]", i, assignment)
+		}
+	}
+}
+
+// TestKMeansIdenticalVectors tests k-means with all identical vectors
+func TestKMeansIdenticalVectors(t *testing.T) {
+	vectors := [][]float32{
+		{5.0, 5.0},
+		{5.0, 5.0},
+		{5.0, 5.0},
+		{5.0, 5.0},
+	}
+
+	dist, _ := NewDistance(L2Squared)
+	centroids, assignments := KMeans(vectors, 2, dist, DefaultMaxIter)
+
+	if len(centroids) != 2 {
+		t.Errorf("KMeans() returned %d centroids, want 2", len(centroids))
+	}
+
+	if len(assignments) != len(vectors) {
+		t.Errorf("KMeans() returned %d assignments, want %d", len(assignments), len(vectors))
+	}
+
+	// All centroids should be close to (5, 5)
+	for i, centroid := range centroids {
+		for j, val := range centroid {
+			diff := math.Abs(float64(val - 5.0))
+			if diff > 0.01 {
+				t.Errorf("centroid[%d][%d] = %f, want ~5.0 (diff: %f)", i, j, val, diff)
 			}
 		}
 	}
 }
 
-func TestKMeansSubspace(t *testing.T) {
-	// Create simple subspace vectors with clear clusters
+// TestKMeansDimensions tests k-means with various dimensions
+func TestKMeansDimensions(t *testing.T) {
+	dimensions := []int{1, 2, 3, 10, 64, 128}
+
+	for _, dim := range dimensions {
+		t.Run(string(rune(dim)), func(t *testing.T) {
+			// Create simple test vectors
+			vectors := make([][]float32, 6)
+			for i := 0; i < 6; i++ {
+				vectors[i] = make([]float32, dim)
+				// Create two distinct patterns
+				val := float32(0.0)
+				if i >= 3 {
+					val = 10.0
+				}
+				for j := 0; j < dim; j++ {
+					vectors[i][j] = val + float32(j)*0.1
+				}
+			}
+
+			dist, _ := NewDistance(L2Squared)
+			centroids, assignments := KMeans(vectors, 2, dist, DefaultMaxIter)
+
+			if len(centroids) != 2 {
+				t.Errorf("KMeans() returned %d centroids, want 2", len(centroids))
+			}
+
+			// Verify centroid dimensions
+			for i, centroid := range centroids {
+				if len(centroid) != dim {
+					t.Errorf("centroid[%d] has dimension %d, want %d", i, len(centroid), dim)
+				}
+			}
+
+			// Verify clustering worked
+			if assignments[0] == assignments[3] {
+				t.Errorf("First and fourth vectors should be in different clusters")
+			}
+		})
+	}
+}
+
+// TestKMeansAssignmentConsistency tests that assignments match nearest centroids
+func TestKMeansAssignmentConsistency(t *testing.T) {
 	vectors := [][]float32{
-		// Cluster 1: around (0, 0)
-		{0, 0},
-		{0.1, 0.1},
-		{-0.1, 0.1},
-		// Cluster 2: around (5, 5)
-		{5, 5},
-		{5.1, 5.1},
-		{4.9, 5.1},
+		{0.0, 0.0},
+		{1.0, 1.0},
+		{10.0, 10.0},
+		{11.0, 11.0},
 	}
 
-	centroids, assignments := KMeansSubspace(vectors, 2, 20)
+	dist, _ := NewDistance(L2Squared)
+	centroids, assignments := KMeans(vectors, 2, dist, DefaultMaxIter)
 
-	// Check that we got 2 centroids
-	if len(centroids) != 2 {
-		t.Errorf("Expected 2 centroids, got %d", len(centroids))
-	}
+	// Verify each vector is assigned to its nearest centroid
+	for i, vector := range vectors {
+		nearestDist := float32(math.Inf(1))
+		nearestCluster := -1
 
-	// Check that all vectors have assignments
-	if len(assignments) != len(vectors) {
-		t.Errorf("Expected %d assignments, got %d", len(vectors), len(assignments))
-	}
-
-	// Vectors 0-2 should be in the same cluster
-	cluster1 := assignments[0]
-	for i := 1; i < 3; i++ {
-		if assignments[i] != cluster1 {
-			t.Errorf("Vectors 0-%d should be in the same cluster", i)
+		for j, centroid := range centroids {
+			d := dist.Calculate(vector, centroid)
+			if d < nearestDist {
+				nearestDist = d
+				nearestCluster = j
+			}
 		}
-	}
 
-	// Vectors 3-5 should be in the same cluster
-	cluster2 := assignments[3]
-	for i := 4; i < 6; i++ {
-		if assignments[i] != cluster2 {
-			t.Errorf("Vectors 3-%d should be in the same cluster", i)
-		}
-	}
-
-	// The two clusters should be different
-	if cluster1 == cluster2 {
-		t.Error("The two clusters should have different assignments")
-	}
-
-	// Check centroid positions are reasonable
-	// One centroid should be near (0, 0) and another near (5, 5)
-	foundCluster1 := false
-	foundCluster2 := false
-
-	for _, c := range centroids {
-		// Check if centroid is near (0, 0) - within 0.5 in both dimensions
-		if math.Abs(float64(c[0])) < 0.5 && math.Abs(float64(c[1])) < 0.5 {
-			foundCluster1 = true
-		}
-		// Check if centroid is near (5, 5) - within 0.5 in both dimensions
-		if math.Abs(float64(c[0]-5)) < 0.5 && math.Abs(float64(c[1]-5)) < 0.5 {
-			foundCluster2 = true
-		}
-	}
-
-	if !foundCluster1 || !foundCluster2 {
-		t.Errorf("Centroids are not in expected positions. Got: %v and %v", centroids[0], centroids[1])
-	}
-}
-
-func TestKMeansSubspaceHighDimensional(t *testing.T) {
-	// Test with higher dimensional subspace vectors
-	dim := 32
-	vectors := make([][]float32, 100)
-
-	// Create 100 vectors: 50 near origin, 50 near (10, 10, ..., 10)
-	for i := 0; i < 50; i++ {
-		vectors[i] = make([]float32, dim)
-		for d := 0; d < dim; d++ {
-			vectors[i][d] = float32(i%3) * 0.1 // Small random variation
-		}
-	}
-
-	for i := 50; i < 100; i++ {
-		vectors[i] = make([]float32, dim)
-		for d := 0; d < dim; d++ {
-			vectors[i][d] = 10.0 + float32(i%3)*0.1
-		}
-	}
-
-	centroids, assignments := KMeansSubspace(vectors, 2, 50)
-
-	// Check that we got 2 centroids
-	if len(centroids) != 2 {
-		t.Errorf("Expected 2 centroids, got %d", len(centroids))
-	}
-
-	// Check that vectors 0-49 are mostly in one cluster
-	cluster1Count := 0
-	firstCluster := assignments[0]
-	for i := 0; i < 50; i++ {
-		if assignments[i] == firstCluster {
-			cluster1Count++
-		}
-	}
-
-	// At least 80% should be in the same cluster
-	if cluster1Count < 40 {
-		t.Errorf("Expected most of first 50 vectors in same cluster, got %d", cluster1Count)
-	}
-
-	// Check that vectors 50-99 are mostly in the other cluster
-	cluster2Count := 0
-	secondCluster := assignments[50]
-	for i := 50; i < 100; i++ {
-		if assignments[i] == secondCluster {
-			cluster2Count++
-		}
-	}
-
-	if cluster2Count < 40 {
-		t.Errorf("Expected most of last 50 vectors in same cluster, got %d", cluster2Count)
-	}
-
-	// The two dominant clusters should be different
-	if firstCluster == secondCluster {
-		t.Error("Expected two different clusters")
-	}
-}
-
-func TestKMeansSubspaceEmptyInput(t *testing.T) {
-	vectors := [][]float32{}
-	centroids, assignments := KMeansSubspace(vectors, 3, 20)
-
-	if centroids != nil {
-		t.Error("Expected nil centroids for empty input")
-	}
-	if assignments != nil {
-		t.Error("Expected nil assignments for empty input")
-	}
-}
-
-func TestKMeansSubspaceInvalidK(t *testing.T) {
-	vectors := [][]float32{
-		{1, 2},
-		{3, 4},
-	}
-
-	// Test k = 0
-	centroids, assignments := KMeansSubspace(vectors, 0, 20)
-	if centroids != nil || assignments != nil {
-		t.Error("Expected nil for k=0")
-	}
-
-	// Test k > len(vectors)
-	centroids, assignments = KMeansSubspace(vectors, 5, 20)
-	if centroids != nil || assignments != nil {
-		t.Error("Expected nil for k > len(vectors)")
-	}
-}
-
-func TestKMeansSubspaceSingleCluster(t *testing.T) {
-	vectors := [][]float32{
-		{1, 2},
-		{3, 4},
-		{5, 6},
-	}
-
-	centroids, assignments := KMeansSubspace(vectors, 1, 20)
-
-	// Check that we got 1 centroid
-	if len(centroids) != 1 {
-		t.Errorf("Expected 1 centroid, got %d", len(centroids))
-	}
-
-	// All vectors should be assigned to cluster 0
-	for i, a := range assignments {
-		if a != 0 {
-			t.Errorf("Vector %d should be assigned to cluster 0, got %d", i, a)
-		}
-	}
-
-	// Centroid should be approximately the mean
-	expectedCentroid := []float32{3, 4}
-	for d := 0; d < 2; d++ {
-		if !almostEqual(centroids[0][d], expectedCentroid[d]) {
-			t.Errorf("Centroid[%d] = %f, want %f", d, centroids[0][d], expectedCentroid[d])
+		if assignments[i] != nearestCluster {
+			t.Errorf("Vector %d assigned to cluster %d, but nearest is cluster %d",
+				i, assignments[i], nearestCluster)
 		}
 	}
 }
 
-// Benchmark tests
-func BenchmarkKMeans(b *testing.B) {
-	// Create realistic sized data: 1000 vectors, 128 dimensions, 10 clusters
-	vectors := make([][]float32, 1000)
-	for i := range vectors {
-		vectors[i] = make([]float32, 128)
-		for d := range vectors[i] {
-			vectors[i][d] = float32(i%10) * 10.0
-		}
+// TestDefaultMaxIter tests that DefaultMaxIter is reasonable
+func TestDefaultMaxIter(t *testing.T) {
+	if DefaultMaxIter <= 0 {
+		t.Errorf("DefaultMaxIter = %d, want positive value", DefaultMaxIter)
 	}
 
-	dist, _ := NewDistance(Euclidean)
+	if DefaultMaxIter < 10 {
+		t.Errorf("DefaultMaxIter = %d, might be too small for convergence", DefaultMaxIter)
+	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		KMeans(vectors, 10, dist, 20)
+	if DefaultMaxIter > 1000 {
+		t.Errorf("DefaultMaxIter = %d, might be too large (slow)", DefaultMaxIter)
 	}
 }
 
-func BenchmarkKMeansSubspace(b *testing.B) {
-	// Create realistic sized subspace data: 1000 vectors, 96 dimensions (768/8), 256 clusters
-	vectors := make([][]float32, 1000)
-	for i := range vectors {
-		vectors[i] = make([]float32, 96)
-		for d := range vectors[i] {
-			vectors[i][d] = float32(i%256) * 0.1
-		}
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		KMeansSubspace(vectors, 256, 20)
-	}
-}
-
-func BenchmarkKMeansLargeK(b *testing.B) {
-	// Test with large k value (realistic for IVF)
-	vectors := make([][]float32, 10000)
-	for i := range vectors {
-		vectors[i] = make([]float32, 128)
-		for d := range vectors[i] {
-			vectors[i][d] = float32(i%100) * 0.5
-		}
-	}
-
-	dist, _ := NewDistance(Euclidean)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		KMeans(vectors, 100, dist, 20)
+// TestUnassignedCluster tests the UnassignedCluster constant
+func TestUnassignedCluster(t *testing.T) {
+	if UnassignedCluster != -1 {
+		t.Errorf("UnassignedCluster = %d, want -1", UnassignedCluster)
 	}
 }
