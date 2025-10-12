@@ -287,4 +287,3 @@ func TestIVFIndexSearchBeforeTrain(t *testing.T) {
 		t.Error("Expected error when searching untrained index, got none")
 	}
 }
-
