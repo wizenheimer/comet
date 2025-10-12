@@ -241,3 +241,32 @@ func kmeansInternal(vectors [][]float32, k int, distance Distance, maxIter int) 
 
 	return centroids, vectorToClusterMapping
 }
+
+// FindNearestCentroidIndex finds the index of the nearest centroid to a given vector.
+//
+// This is a utility function that performs a linear search through all centroids
+// to find the one with minimum distance to the query vector.
+//
+// Parameters:
+//   - v: Query vector to find nearest centroid for
+//   - centroids: Slice of centroid vectors to search through
+//   - distance: Distance metric to use for comparison
+//
+// Returns:
+//   - int: Index of the nearest centroid (0 to len(centroids)-1)
+//
+// Time Complexity: O(k × dim) where k = len(centroids)
+func FindNearestCentroidIndex(v []float32, centroids [][]float32, distance Distance) int {
+	minDist := float32(math.Inf(1))
+	minIdx := 0
+
+	for i, centroid := range centroids {
+		dist := distance.Calculate(v, centroid)
+		if dist < minDist {
+			minDist = dist
+			minIdx = i
+		}
+	}
+
+	return minIdx
+}

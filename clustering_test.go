@@ -644,3 +644,306 @@ func TestUnassignedCluster(t *testing.T) {
 		t.Errorf("UnassignedCluster = %d, want -1", UnassignedCluster)
 	}
 }
+
+// TestFindNearestCentroidIndexBasic tests basic functionality of FindNearestCentroidIndex
+func TestFindNearestCentroidIndexBasic(t *testing.T) {
+	centroids := [][]float32{
+		{0.0, 0.0},
+		{10.0, 10.0},
+		{20.0, 20.0},
+	}
+
+	tests := []struct {
+		name     string
+		vector   []float32
+		expected int
+	}{
+		{"near first centroid", []float32{0.5, 0.5}, 0},
+		{"exact first centroid", []float32{0.0, 0.0}, 0},
+		{"near second centroid", []float32{10.5, 10.5}, 1},
+		{"exact second centroid", []float32{10.0, 10.0}, 1},
+		{"near third centroid", []float32{19.5, 19.5}, 2},
+		{"exact third centroid", []float32{20.0, 20.0}, 2},
+		{"between first and second", []float32{4.0, 4.0}, 0},
+		{"between second and third", []float32{15.0, 15.0}, 1},
+	}
+
+	dist, _ := NewDistance(L2Squared)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := FindNearestCentroidIndex(tt.vector, centroids, dist)
+			if result != tt.expected {
+				t.Errorf("FindNearestCentroidIndex() = %d, want %d", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestFindNearestCentroidIndexSingleCentroid tests with a single centroid
+func TestFindNearestCentroidIndexSingleCentroid(t *testing.T) {
+	centroids := [][]float32{
+		{5.0, 5.0, 5.0},
+	}
+
+	dist, _ := NewDistance(L2Squared)
+
+	tests := [][]float32{
+		{0.0, 0.0, 0.0},
+		{5.0, 5.0, 5.0},
+		{10.0, 10.0, 10.0},
+		{-5.0, -5.0, -5.0},
+	}
+
+	for i, vector := range tests {
+		result := FindNearestCentroidIndex(vector, centroids, dist)
+		if result != 0 {
+			t.Errorf("Test %d: FindNearestCentroidIndex() = %d, want 0", i, result)
+		}
+	}
+}
+
+// TestFindNearestCentroidIndexWithDifferentDistances tests with different distance metrics
+func TestFindNearestCentroidIndexWithDifferentDistances(t *testing.T) {
+	centroids := [][]float32{
+		{1.0, 0.0, 0.0},
+		{0.0, 1.0, 0.0},
+		{0.0, 0.0, 1.0},
+	}
+
+	tests := []struct {
+		name         string
+		distanceKind DistanceKind
+		vector       []float32
+		expected     int
+	}{
+		{"L2Squared - near first", L2Squared, []float32{0.9, 0.1, 0.1}, 0},
+		{"L2Squared - near second", L2Squared, []float32{0.1, 0.9, 0.1}, 1},
+		{"L2Squared - near third", L2Squared, []float32{0.1, 0.1, 0.9}, 2},
+		{"Euclidean - near first", Euclidean, []float32{0.9, 0.1, 0.1}, 0},
+		{"Euclidean - near second", Euclidean, []float32{0.1, 0.9, 0.1}, 1},
+		{"Euclidean - near third", Euclidean, []float32{0.1, 0.1, 0.9}, 2},
+		{"Cosine - near first", Cosine, []float32{0.9, 0.1, 0.1}, 0},
+		{"Cosine - near second", Cosine, []float32{0.1, 0.9, 0.1}, 1},
+		{"Cosine - near third", Cosine, []float32{0.1, 0.1, 0.9}, 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dist, err := NewDistance(tt.distanceKind)
+			if err != nil {
+				t.Fatalf("NewDistance() error: %v", err)
+			}
+
+			result := FindNearestCentroidIndex(tt.vector, centroids, dist)
+			if result != tt.expected {
+				t.Errorf("FindNearestCentroidIndex() = %d, want %d", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestFindNearestCentroidIndexHighDimensional tests with high-dimensional vectors
+func TestFindNearestCentroidIndexHighDimensional(t *testing.T) {
+	dim := 128
+	numCentroids := 10
+
+	// Create distinct centroids
+	centroids := make([][]float32, numCentroids)
+	for i := 0; i < numCentroids; i++ {
+		centroids[i] = make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			centroids[i][j] = float32(i * 10)
+		}
+	}
+
+	dist, _ := NewDistance(L2Squared)
+
+	// Test vectors that are clearly closest to specific centroids
+	for targetCentroid := 0; targetCentroid < numCentroids; targetCentroid++ {
+		// Create a vector very close to the target centroid
+		testVector := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			testVector[j] = float32(targetCentroid*10) + 0.1
+		}
+
+		result := FindNearestCentroidIndex(testVector, centroids, dist)
+		if result != targetCentroid {
+			t.Errorf("Vector close to centroid %d was assigned to %d", targetCentroid, result)
+		}
+	}
+}
+
+// TestFindNearestCentroidIndexConsistency tests consistency with k-means assignments
+func TestFindNearestCentroidIndexConsistency(t *testing.T) {
+	vectors := [][]float32{
+		{0.0, 0.0},
+		{1.0, 1.0},
+		{10.0, 10.0},
+		{11.0, 11.0},
+		{20.0, 20.0},
+		{21.0, 21.0},
+	}
+
+	dist, _ := NewDistance(L2Squared)
+	centroids, assignments := KMeans(vectors, 3, dist, DefaultMaxIter)
+
+	// Verify FindNearestCentroidIndex gives same results as k-means assignments
+	for i, vector := range vectors {
+		result := FindNearestCentroidIndex(vector, centroids, dist)
+		if result != assignments[i] {
+			t.Errorf("Vector %d: FindNearestCentroidIndex() = %d, k-means assignment = %d",
+				i, result, assignments[i])
+		}
+	}
+}
+
+// TestFindNearestCentroidIndexTwoIdenticalCentroids tests behavior with identical centroids
+func TestFindNearestCentroidIndexTwoIdenticalCentroids(t *testing.T) {
+	centroids := [][]float32{
+		{5.0, 5.0},
+		{5.0, 5.0}, // Identical to first
+		{10.0, 10.0},
+	}
+
+	dist, _ := NewDistance(L2Squared)
+	vector := []float32{5.1, 5.1}
+
+	// Should return one of the first two (whichever is checked first)
+	result := FindNearestCentroidIndex(vector, centroids, dist)
+	if result != 0 && result != 1 {
+		t.Errorf("FindNearestCentroidIndex() = %d, want 0 or 1", result)
+	}
+}
+
+// TestFindNearestCentroidIndexBoundaryCase tests vectors exactly between centroids
+func TestFindNearestCentroidIndexBoundaryCase(t *testing.T) {
+	centroids := [][]float32{
+		{0.0, 0.0},
+		{10.0, 10.0},
+	}
+
+	dist, _ := NewDistance(L2Squared)
+
+	// Vector exactly in the middle
+	vector := []float32{5.0, 5.0}
+	result := FindNearestCentroidIndex(vector, centroids, dist)
+
+	// Should return 0 or 1 (either is valid, we just check it's valid)
+	if result != 0 && result != 1 {
+		t.Errorf("FindNearestCentroidIndex() = %d, want 0 or 1", result)
+	}
+}
+
+// TestFindNearestCentroidIndexManyCentroids tests with many centroids
+func TestFindNearestCentroidIndexManyCentroids(t *testing.T) {
+	numCentroids := 100
+	dim := 64
+
+	// Create centroids in a line
+	centroids := make([][]float32, numCentroids)
+	for i := 0; i < numCentroids; i++ {
+		centroids[i] = make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			centroids[i][j] = float32(i)
+		}
+	}
+
+	dist, _ := NewDistance(L2Squared)
+
+	// Test a few specific vectors
+	tests := []struct {
+		targetIdx int
+	}{
+		{0},
+		{10},
+		{50},
+		{99},
+	}
+
+	for _, tt := range tests {
+		// Create vector very close to target centroid
+		vector := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vector[j] = float32(tt.targetIdx) + 0.01
+		}
+
+		result := FindNearestCentroidIndex(vector, centroids, dist)
+		if result != tt.targetIdx {
+			t.Errorf("Vector near centroid %d was assigned to %d", tt.targetIdx, result)
+		}
+	}
+}
+
+// TestFindNearestCentroidIndexNegativeValues tests with negative coordinate values
+func TestFindNearestCentroidIndexNegativeValues(t *testing.T) {
+	centroids := [][]float32{
+		{-10.0, -10.0},
+		{0.0, 0.0},
+		{10.0, 10.0},
+	}
+
+	tests := []struct {
+		vector   []float32
+		expected int
+	}{
+		{[]float32{-9.0, -9.0}, 0},
+		{[]float32{0.0, 0.0}, 1},
+		{[]float32{9.0, 9.0}, 2},
+		{[]float32{-5.0, -5.0}, 0},
+		{[]float32{6.0, 6.0}, 2}, // Clearly closer to centroid 2
+	}
+
+	dist, _ := NewDistance(L2Squared)
+
+	for i, tt := range tests {
+		result := FindNearestCentroidIndex(tt.vector, centroids, dist)
+		if result != tt.expected {
+			t.Errorf("Test %d: FindNearestCentroidIndex() = %d, want %d", i, result, tt.expected)
+		}
+	}
+}
+
+// TestFindNearestCentroidIndexWithNormalization tests with cosine distance (normalized vectors)
+func TestFindNearestCentroidIndexWithNormalization(t *testing.T) {
+	// For cosine distance, vectors should be normalized
+	centroids := [][]float32{
+		{1.0, 0.0, 0.0}, // Already normalized
+		{0.0, 1.0, 0.0},
+		{0.0, 0.0, 1.0},
+	}
+
+	dist, _ := NewDistance(Cosine)
+
+	tests := []struct {
+		name     string
+		vector   []float32
+		expected int
+	}{
+		{"along x-axis", []float32{10.0, 0.0, 0.0}, 0},
+		{"along y-axis", []float32{0.0, 10.0, 0.0}, 1},
+		{"along z-axis", []float32{0.0, 0.0, 10.0}, 2},
+		{"diagonal xy", []float32{1.0, 1.0, 0.0}, 0}, // Closer to x or y
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Normalize the test vector
+			vectorCopy := make([]float32, len(tt.vector))
+			copy(vectorCopy, tt.vector)
+			dist.PreprocessInPlace(vectorCopy)
+
+			result := FindNearestCentroidIndex(vectorCopy, centroids, dist)
+			// For diagonal cases, either centroid might be valid
+			if tt.name == "diagonal xy" {
+				if result != 0 && result != 1 {
+					t.Errorf("FindNearestCentroidIndex() = %d, want 0 or 1", result)
+				}
+			} else {
+				if result != tt.expected {
+					t.Errorf("FindNearestCentroidIndex() = %d, want %d", result, tt.expected)
+				}
+			}
+		})
+	}
+}
