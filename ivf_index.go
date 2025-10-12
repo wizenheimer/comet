@@ -209,9 +209,9 @@ func (idx *IVFIndex) Train(vectors []VectorNode) error {
 
 	// Run k-means clustering to learn centroids
 	// maxIter=20 is typically sufficient for convergence
-	centroids, err := KMeans(rawVectors, idx.nlist, idx.distance, 20)
+	centroids, _ := KMeans(rawVectors, idx.nlist, idx.distance, 20)
 
-	if centroids == nil || err != nil {
+	if centroids == nil {
 		return fmt.Errorf("k-means clustering failed")
 	}
 
