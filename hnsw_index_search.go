@@ -4,10 +4,38 @@ import (
 	"container/heap"
 	"fmt"
 	"sort"
+	"sync"
 )
 
 // Compile-time checks to ensure hnswIndexSearch implements VectorSearch
 var _ VectorSearch = (*hnswIndexSearch)(nil)
+
+// ============================================================================
+// HEAP POOLS FOR ALLOCATION OPTIMIZATION
+// ============================================================================
+
+// minHeapPool is a sync.Pool for min-heaps to reduce allocations during search.
+//
+// OPTIMIZATION RATIONALE:
+// - searchLayer creates new heaps on every call
+// - searchLayer is called frequently during insert and search operations
+// - Pooling reduces GC pressure and improves throughput
+var minHeapPool = sync.Pool{
+	New: func() interface{} {
+		h := &minHeap{}
+		heap.Init(h)
+		return h
+	},
+}
+
+// maxHeapPool is a sync.Pool for max-heaps to reduce allocations during search.
+var maxHeapPool = sync.Pool{
+	New: func() interface{} {
+		h := &maxHeap{}
+		heap.Init(h)
+		return h
+	},
+}
 
 // ============================================================================
 // SEARCH IMPLEMENTATION
@@ -290,11 +318,21 @@ func (h *minHeap) Pop() interface{} {
 	return x
 }
 
-// newMinHeap creates and initializes a new min-heap.
+// newMinHeap gets a min-heap from the pool.
+//
+// IMPORTANT: Caller must call putMinHeap() when done to return to pool.
 func newMinHeap() *minHeap {
-	h := &minHeap{}
-	heap.Init(h)
-	return h
+	return minHeapPool.Get().(*minHeap)
+}
+
+// putMinHeap returns a min-heap to the pool after resetting it.
+//
+// CRITICAL: This must be called when done with the heap to enable pooling.
+func putMinHeap(h *minHeap) {
+	// Reset heap by truncating to zero length
+	// This retains the underlying capacity for reuse
+	*h = (*h)[:0]
+	minHeapPool.Put(h)
 }
 
 // maxHeap is a max-heap of candidates (farthest on top).
@@ -319,9 +357,19 @@ func (h *maxHeap) Pop() interface{} {
 	return x
 }
 
-// newMaxHeap creates and initializes a new max-heap.
+// newMaxHeap gets a max-heap from the pool.
+//
+// IMPORTANT: Caller must call putMaxHeap() when done to return to pool.
 func newMaxHeap() *maxHeap {
-	h := &maxHeap{}
-	heap.Init(h)
-	return h
+	return maxHeapPool.Get().(*maxHeap)
+}
+
+// putMaxHeap returns a max-heap to the pool after resetting it.
+//
+// CRITICAL: This must be called when done with the heap to enable pooling.
+func putMaxHeap(h *maxHeap) {
+	// Reset heap by truncating to zero length
+	// This retains the underlying capacity for reuse
+	*h = (*h)[:0]
+	maxHeapPool.Put(h)
 }

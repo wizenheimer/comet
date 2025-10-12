@@ -555,16 +555,23 @@ func (idx *HNSWIndex) insertNode(node *hnswNode) {
 //   - candidates (min-heap): Nodes to explore, closest first
 //   - result (max-heap): Best ef nodes found, worst first
 //
+// HEAP POOLING OPTIMIZATION:
+// Gets heaps from sync.Pool and returns them when done to reduce allocations.
+//
 // CONCURRENCY: This is an internal helper method. The caller MUST hold at least a read lock.
 func (idx *HNSWIndex) searchLayer(query []float32, entryPoint uint32, ef int, layer int) []candidate {
 	// Track visited nodes using RoaringBitmap for efficiency
 	visited := roaring.New()
 
 	// Candidates heap: nodes to explore (min-heap)
+	// Get from pool for allocation optimization
 	candidates := newMinHeap()
+	defer putMinHeap(candidates) // Return to pool when done
 
 	// Results heap: best ef nodes (max-heap)
+	// Get from pool for allocation optimization
 	result := newMaxHeap()
+	defer putMaxHeap(result) // Return to pool when done
 
 	// Check entry point BEFORE adding to candidates
 	if !idx.deletedNodes.Contains(entryPoint) {
@@ -609,7 +616,7 @@ func (idx *HNSWIndex) searchLayer(query []float32, entryPoint uint32, ef int, la
 		}
 	}
 
-	// Extract results
+	// Extract results (do this before defer returns heaps to pool)
 	finalResults := make([]candidate, result.Len())
 	for i := result.Len() - 1; i >= 0; i-- {
 		finalResults[i] = heap.Pop(result).(candidate)
