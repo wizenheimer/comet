@@ -48,6 +48,11 @@ type VectorSearch interface {
 	// A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
 	WithCutoff(cutoff int) VectorSearch
 
+	// WithDocumentIDs sets the eligible document IDs for pre-filtering.
+	// Only vectors with IDs in this set will be considered as candidates.
+	// If empty, all documents are eligible (default behavior).
+	WithDocumentIDs(docIDs ...uint32) VectorSearch
+
 	// Execute the search and return the results
 	Execute() ([]VectorResult, error)
 }
@@ -84,6 +89,11 @@ type TextSearch interface {
 	// WithCutoff sets the autocut parameter for automatically determining result cutoff.
 	// A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
 	WithCutoff(cutoff int) TextSearch
+
+	// WithDocumentIDs sets the eligible document IDs for pre-filtering.
+	// Only documents with IDs in this set will be considered as candidates.
+	// If empty, all documents are eligible (default behavior).
+	WithDocumentIDs(docIDs ...uint32) TextSearch
 
 	// Execute the search and return the results
 	Execute() ([]TextResult, error)
