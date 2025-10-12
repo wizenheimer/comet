@@ -16,26 +16,30 @@ func sanitizeK(k, maxResults int) int {
 	return k
 }
 
-// limitResults applies k-limiting to a result slice.
+// LimitResults applies k-limiting to any result slice that implements the Result interface.
+// This generic function works with both VectorResult and TextResult.
 //
-// This is a convenience wrapper around sanitizeK that both sanitizes k
-// and returns the sliced results in one call.
+// Type parameter T must be a type that implements the Result interface.
 //
 // Usage:
 //
-//	return limitResults(results, requestedK)
-func limitResults(results []VectorResult, k int) []VectorResult {
+//	vectorResults := LimitResults(vectorResults, requestedK)
+//	textResults := LimitResults(textResults, requestedK)
+func LimitResults[T Result](results []T, k int) []T {
 	k = sanitizeK(k, len(results))
 	return results[:k]
 }
 
-// autocutResults applies autocut algorithm to determine optimal result cutoff.
+// AutocutResults applies autocut algorithm to determine optimal result cutoff.
+// This generic function works with any result type that implements the Result interface.
 //
-// It extracts scores from VectorResult slice and uses the Autocut algorithm
+// It extracts scores from the result slice and uses the Autocut algorithm
 // to find the optimal cutoff point based on the score distribution.
 //
+// Type parameter T must be a type that implements the Result interface.
+//
 // Parameters:
-//   - results: slice of VectorResult to analyze
+//   - results: slice of results implementing Result interface
 //   - cutoff: number of extrema to find before cutting (-1 disables autocut)
 //
 // Returns the sliced results up to the autocut point. If cutoff is -1, returns
@@ -43,18 +47,18 @@ func limitResults(results []VectorResult, k int) []VectorResult {
 //
 // Usage:
 //
-//	return autocutResults(results, 1)  // Apply autocut with 1 extremum
-//	return autocutResults(results, -1) // No-op, returns all results
-func autocutResults(results []VectorResult, cutoff int) []VectorResult {
+//	vectorResults = AutocutResults(vectorResults, 1)  // Apply autocut with 1 extremum
+//	textResults = AutocutResults(textResults, -1)     // No-op, returns all results
+func AutocutResults[T Result](results []T, cutoff int) []T {
 	// No-op if cutoff is -1 or no results
 	if cutoff == -1 || len(results) == 0 {
 		return results
 	}
 
-	// Extract scores from results
+	// Extract scores from results using the Result interface
 	scores := make([]float32, len(results))
 	for i, result := range results {
-		scores[i] = result.Score
+		scores[i] = result.GetScore()
 	}
 
 	// Apply autocut algorithm

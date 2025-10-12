@@ -138,17 +138,17 @@ func TestLimitResults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			results := createResults(tt.resultsSize)
-			got := limitResults(results, tt.k)
+			got := LimitResults(results, tt.k)
 
 			if len(got) != tt.wantSize {
-				t.Errorf("limitResults() returned %d results, want %d",
+				t.Errorf("LimitResults() returned %d results, want %d",
 					len(got), tt.wantSize)
 			}
 
 			// Verify that the returned results are the first k elements
 			for i := 0; i < len(got); i++ {
 				if got[i].Node.ID() != uint32(i) {
-					t.Errorf("limitResults()[%d].Node.ID() = %d, want %d",
+					t.Errorf("LimitResults()[%d].Node.ID() = %d, want %d",
 						i, got[i].Node.ID(), uint32(i))
 				}
 			}
@@ -166,7 +166,7 @@ func TestLimitResultsPreservesOrder(t *testing.T) {
 		{Node: *NewVectorNodeWithID(500, []float32{5.0}), Score: 5.0},
 	}
 
-	limited := limitResults(results, 3)
+	limited := LimitResults(results, 3)
 
 	// Verify we got exactly 3 results
 	if len(limited) != 3 {
@@ -327,21 +327,21 @@ func TestAutocutResults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			results := createResults(tt.scores)
-			got := autocutResults(results, tt.cutoff)
+			got := AutocutResults(results, tt.cutoff)
 
 			if len(got) != tt.expectedSize {
-				t.Errorf("autocutResults() returned %d results, want %d",
+				t.Errorf("AutocutResults() returned %d results, want %d",
 					len(got), tt.expectedSize)
 			}
 
 			// Verify that results are preserved in order
 			for i := 0; i < len(got); i++ {
 				if got[i].Node.ID() != uint32(i) {
-					t.Errorf("autocutResults()[%d].Node.ID() = %d, want %d",
+					t.Errorf("AutocutResults()[%d].Node.ID() = %d, want %d",
 						i, got[i].Node.ID(), uint32(i))
 				}
 				if got[i].Score != tt.scores[i] {
-					t.Errorf("autocutResults()[%d].Score = %f, want %f",
+					t.Errorf("AutocutResults()[%d].Score = %f, want %f",
 						i, got[i].Score, tt.scores[i])
 				}
 			}
@@ -359,7 +359,7 @@ func TestAutocutResultsPreservesOrder(t *testing.T) {
 		{Node: *NewVectorNodeWithID(500, []float32{0.9}), Score: 0.9},
 	}
 
-	cut := autocutResults(results, 1)
+	cut := AutocutResults(results, 1)
 
 	// Should cut after the gap (first 3 results)
 	if len(cut) != 3 {

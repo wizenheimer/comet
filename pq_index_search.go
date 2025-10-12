@@ -104,7 +104,7 @@ func (s *pqIndexSearch) Execute() ([]VectorResult, error) {
 	}
 
 	// Get aggregation instance
-	aggregation, err := NewAggregation(aggregationKind)
+	aggregation, err := NewVectorAggregation(aggregationKind)
 	if err != nil {
 		return nil, err
 	}
@@ -138,8 +138,8 @@ func (s *pqIndexSearch) Execute() ([]VectorResult, error) {
 	aggregatedResults := aggregation.Aggregate(allResults)
 
 	// Apply k limit and autocut
-	results := limitResults(aggregatedResults, s.k)
-	results = autocutResults(results, s.cutoff)
+	results := LimitResults(aggregatedResults, s.k)
+	results = AutocutResults(results, s.cutoff)
 
 	return results, nil
 }
