@@ -555,6 +555,129 @@ func TestFlatIndexSearchDifferentDistanceMetrics(t *testing.T) {
 	}
 }
 
+// TestFlatIndexSearchCombinedQueryAndNode tests searching with both queries and node IDs
+func TestFlatIndexSearchCombinedQueryAndNode(t *testing.T) {
+	idx, err := NewFlatIndex(3, Euclidean)
+	if err != nil {
+		t.Fatalf("NewFlatIndex() error: %v", err)
+	}
+
+	// Add vectors
+	vectors := [][]float32{
+		{1, 0, 0},
+		{0, 1, 0},
+		{0, 0, 1},
+		{2, 0, 0},
+	}
+
+	nodes := make([]*VectorNode, len(vectors))
+	for i, v := range vectors {
+		nodes[i] = NewVectorNode(v)
+		idx.Add(*nodes[i])
+	}
+
+	// Search using both a direct query and a node ID
+	// Node 0 has vector [1, 0, 0]
+	// Direct query is [0, 1, 0]
+	results, err := idx.NewSearch().
+		WithQuery([]float32{0, 1, 0}).
+		WithNode(nodes[0].ID()).
+		WithK(2).
+		Execute()
+
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+
+	// Should get results from both queries
+	// Each query returns top 2, so we expect 4 total results
+	if len(results) != 4 {
+		t.Errorf("Expected 4 results (2 per query), got %d", len(results))
+	}
+}
+
+// TestFlatIndexSearchMultipleQueriesAndNodes tests batch search with mixed queries and nodes
+func TestFlatIndexSearchMultipleQueriesAndNodes(t *testing.T) {
+	idx, err := NewFlatIndex(3, Euclidean)
+	if err != nil {
+		t.Fatalf("NewFlatIndex() error: %v", err)
+	}
+
+	// Add vectors
+	vectors := [][]float32{
+		{1, 0, 0},
+		{0, 1, 0},
+		{0, 0, 1},
+		{2, 0, 0},
+		{0, 2, 0},
+	}
+
+	nodes := make([]*VectorNode, len(vectors))
+	for i, v := range vectors {
+		nodes[i] = NewVectorNode(v)
+		idx.Add(*nodes[i])
+	}
+
+	// Search with 2 direct queries and 2 node IDs
+	results, err := idx.NewSearch().
+		WithQuery([]float32{1.1, 0, 0}, []float32{0, 1.1, 0}).
+		WithNode(nodes[2].ID(), nodes[3].ID()).
+		WithK(2).
+		Execute()
+
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+
+	// 4 queries (2 direct + 2 from nodes) × k=2 = 8 total results
+	if len(results) != 8 {
+		t.Errorf("Expected 8 results, got %d", len(results))
+	}
+}
+
+// TestFlatIndexSearchCombinedWithThreshold tests combined search with threshold
+func TestFlatIndexSearchCombinedWithThreshold(t *testing.T) {
+	idx, err := NewFlatIndex(3, Euclidean)
+	if err != nil {
+		t.Fatalf("NewFlatIndex() error: %v", err)
+	}
+
+	// Add vectors
+	vectors := [][]float32{
+		{1, 0, 0},
+		{0, 1, 0},
+		{0, 0, 1},
+		{5, 0, 0},
+		{0, 5, 0},
+	}
+
+	nodes := make([]*VectorNode, len(vectors))
+	for i, v := range vectors {
+		nodes[i] = NewVectorNode(v)
+		idx.Add(*nodes[i])
+	}
+
+	// Search with query and node, but with threshold
+	results, err := idx.NewSearch().
+		WithQuery([]float32{1, 0, 0}).
+		WithNode(nodes[1].ID()). // [0, 1, 0]
+		WithK(10).
+		WithThreshold(2.0).
+		Execute()
+
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+
+	// Both queries should only return vectors within distance 2.0
+	// Query [1,0,0]: gets [1,0,0] (dist 0), [0,1,0] (dist ~1.41), [0,0,1] (dist ~1.41)
+	// Query [0,1,0]: gets [0,1,0] (dist 0), [1,0,0] (dist ~1.41), [0,0,1] (dist ~1.41)
+	// So we should get at most 6 results (with some duplicates being counted separately)
+	if len(results) == 0 {
+		t.Error("Expected some results within threshold, got none")
+	}
+}
+
 // Helper functions
 
 func vectorsEqual(v1, v2 []float32) bool {

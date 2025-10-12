@@ -125,6 +125,15 @@ func NewFlatIndex(dim int, distanceKind DistanceKind) (*FlatIndex, error) {
 	}, nil
 }
 
+// Train is a no-op for flat index since vectors are stored in memory.
+// This method exists to satisfy the VectorIndex interface.
+//
+// Returns:
+//   - error: Always returns nil
+func (idx *FlatIndex) Train(vectors []VectorNode) error {
+	return nil
+}
+
 // Add adds a vector to the flat index.
 //
 // Vectors are preprocessed according to the distance metric:
@@ -239,4 +248,10 @@ func (idx *FlatIndex) DistanceKind() DistanceKind {
 //   - VectorIndexKind: Always returns FlatIndex
 func (idx *FlatIndex) Kind() VectorIndexKind {
 	return FlatIndexKind
+}
+
+// Trained returns true if the index has been trained
+// This is a no-op for flat index since it doesn't need training
+func (idx *FlatIndex) Trained() bool {
+	return true
 }

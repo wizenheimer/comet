@@ -28,6 +28,9 @@ var (
 
 // VectorIndex is the interface for the vector index
 type VectorIndex interface {
+	// Train the index
+	Train(vectors []VectorNode) error
+
 	// Add a new vector to the index
 	Add(vector VectorNode) error
 
@@ -48,4 +51,7 @@ type VectorIndex interface {
 
 	// Kind returns the type of vector index
 	Kind() VectorIndexKind
+
+	// Trained returns true if the index has been trained
+	Trained() bool
 }

@@ -17,23 +17,29 @@ type flatIndexSearch struct {
 	threshold float32
 }
 
-// WithQuery sets the query vector(s) - supports single or batch queries
+// WithQuery sets the query vector(s) - supports single or batch queries.
+// Can be combined with WithNode to search from both direct queries and node-based queries.
 func (s *flatIndexSearch) WithQuery(queries ...[]float32) VectorSearch {
 	s.queries = queries
-	s.nodeIDs = nil // Clear node-based search
 	return s
 }
 
-// WithNode sets the node ID(s) to search from - supports single or batch nodes
+// WithNode sets the node ID(s) to search from - supports single or batch nodes.
+// Can be combined with WithQuery to search from both direct queries and node-based queries.
 func (s *flatIndexSearch) WithNode(nodeIDs ...uint32) VectorSearch {
 	s.nodeIDs = nodeIDs
-	s.queries = nil // Clear query-based search
 	return s
 }
 
 // WithK sets the number of results to return
 func (s *flatIndexSearch) WithK(k int) VectorSearch {
 	s.k = k
+	return s
+}
+
+// WithNProbes sets the number of probes to use for the search
+// This is a no-op for flat index since it doesn't use probes
+func (s *flatIndexSearch) WithNProbes(nProbes int) VectorSearch {
 	return s
 }
 
@@ -45,35 +51,36 @@ func (s *flatIndexSearch) WithThreshold(threshold float32) VectorSearch {
 
 // Execute performs the actual search and returns results.
 //
-// This method validates the search configuration and then executes either
-// a query-based or node-based search depending on which was configured.
+// This method validates the search configuration and then executes the search
+// using all specified queries (both direct queries and node-based queries).
 //
 // Returns:
 //   - []VectorNode: Search results sorted by distance
 //   - error: Returns error if search configuration is invalid
 func (s *flatIndexSearch) Execute() ([]VectorNode, error) {
-	// Validate that either queries or nodeIDs are set, but not both
-	if len(s.queries) > 0 && len(s.nodeIDs) > 0 {
-		return nil, fmt.Errorf("cannot specify both queries and node IDs")
-	}
+	// Validate that at least one of queries or nodeIDs is set
 	if len(s.queries) == 0 && len(s.nodeIDs) == 0 {
 		return nil, fmt.Errorf("must specify either queries or node IDs")
 	}
 
-	// Execute node-based search if node IDs are specified
+	// Collect all queries (both direct queries and node-based queries)
+	allQueries := make([][]float32, 0, len(s.queries)+len(s.nodeIDs))
+
+	// Add direct queries
+	allQueries = append(allQueries, s.queries...)
+
+	// Convert nodes to queries if specified
 	if len(s.nodeIDs) > 0 {
-		return s.executeNodeSearch()
+		nodeQueries, err := s.lookupNodeVectors()
+		if err != nil {
+			return nil, err
+		}
+		allQueries = append(allQueries, nodeQueries...)
 	}
 
-	// Execute query-based search
-	return s.executeQuerySearch()
-}
-
-// executeQuerySearch performs search using query vectors.
-func (s *flatIndexSearch) executeQuerySearch() ([]VectorNode, error) {
+	// Execute search with all queries
 	var allResults []VectorNode
-
-	for _, query := range s.queries {
+	for _, query := range allQueries {
 		results, err := s.searchSingleQuery(query)
 		if err != nil {
 			return nil, err
@@ -84,13 +91,11 @@ func (s *flatIndexSearch) executeQuerySearch() ([]VectorNode, error) {
 	return allResults, nil
 }
 
-// executeNodeSearch performs search using node IDs.
-// This finds the vectors corresponding to the node IDs and uses them as queries.
-func (s *flatIndexSearch) executeNodeSearch() ([]VectorNode, error) {
-	// Acquire lock once for finding all node vectors
+// lookupNodeVectors converts node IDs to their corresponding vectors.
+func (s *flatIndexSearch) lookupNodeVectors() ([][]float32, error) {
 	s.index.mu.RLock()
+	defer s.index.mu.RUnlock()
 
-	// Find all query vectors first
 	queries := make([][]float32, 0, len(s.nodeIDs))
 	for _, nodeID := range s.nodeIDs {
 		found := false
@@ -103,24 +108,11 @@ func (s *flatIndexSearch) executeNodeSearch() ([]VectorNode, error) {
 		}
 
 		if !found {
-			s.index.mu.RUnlock()
 			return nil, fmt.Errorf("node ID %d not found in index", nodeID)
 		}
 	}
 
-	s.index.mu.RUnlock()
-
-	// Now search with the found vectors
-	var allResults []VectorNode
-	for _, query := range queries {
-		results, err := s.searchSingleQuery(query)
-		if err != nil {
-			return nil, err
-		}
-		allResults = append(allResults, results...)
-	}
-
-	return allResults, nil
+	return queries, nil
 }
 
 // searchSingleQuery performs the core kNN search for a single query vector.

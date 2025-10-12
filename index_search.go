@@ -11,6 +11,9 @@ type VectorSearch interface {
 	// WithK sets the number of results to return
 	WithK(k int) VectorSearch
 
+	// WithNProbes sets the number of probes to use for the search
+	WithNProbes(nProbes int) VectorSearch
+
 	// WithThreshold sets a distance threshold for results (optional)
 	WithThreshold(threshold float32) VectorSearch
 
