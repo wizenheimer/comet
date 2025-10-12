@@ -977,7 +977,7 @@ func TestHNSWIndexSingleNode(t *testing.T) {
 		t.Errorf("Expected 1 result, got %d", len(results))
 	}
 
-	if len(results) > 0 && results[0].ID() != node.ID() {
+	if len(results) > 0 && results[0].Node.ID() != node.ID() {
 		t.Error("Search should return the single node")
 	}
 }

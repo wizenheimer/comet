@@ -953,7 +953,7 @@ func TestIVFPQIndexSearchResultsConsistency(t *testing.T) {
 	query := []float32{5, 6, 7, 8, 9, 10, 11, 12}
 
 	// Run same search multiple times
-	var firstResults []VectorNode
+	var firstResults []VectorResult
 	for i := 0; i < 3; i++ {
 		results, err := idx.NewSearch().
 			WithQuery(query).
@@ -1032,7 +1032,7 @@ func TestIVFPQIndexSearchApproximateAccuracy(t *testing.T) {
 	// The exact vector should be in top results (IVFPQ is approximate, so it might not be #1)
 	found := false
 	for i := 0; i < len(results) && i < 3; i++ {
-		if results[i].ID() == node1.ID() {
+		if results[i].Node.ID() == node1.ID() {
 			found = true
 			break
 		}

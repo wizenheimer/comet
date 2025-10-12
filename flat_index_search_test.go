@@ -42,8 +42,8 @@ func TestFlatIndexSearchSimple(t *testing.T) {
 	}
 
 	// First result should be [1, 0, 0] (exact match)
-	if !vectorsEqual(results[0].Vector(), []float32{1, 0, 0}) {
-		t.Errorf("Expected first result to be [1, 0, 0], got %v", results[0].Vector())
+	if !vectorsEqual(results[0].Node.Vector(), []float32{1, 0, 0}) {
+		t.Errorf("Expected first result to be [1, 0, 0], got %v", results[0].Node.Vector())
 	}
 }
 
@@ -121,8 +121,8 @@ func TestFlatIndexSearchCosine(t *testing.T) {
 
 	// Should find [1, 0, 0] as it's parallel (cosine distance = 0)
 	expected := []float32{1, 0, 0}
-	if !vectorsAlmostEqual(results[0].Vector(), expected, 0.001) {
-		t.Errorf("Expected result %v, got %v", expected, results[0].Vector())
+	if !vectorsAlmostEqual(results[0].Node.Vector(), expected, 0.001) {
+		t.Errorf("Expected result %v, got %v", expected, results[0].Node.Vector())
 	}
 }
 
@@ -157,8 +157,8 @@ func TestFlatIndexSearchByNode(t *testing.T) {
 	}
 
 	// First result should be the query node itself
-	if results[0].ID() != node1.ID() {
-		t.Errorf("Expected first result to be query node %d, got %d", node1.ID(), results[0].ID())
+	if results[0].Node.ID() != node1.ID() {
+		t.Errorf("Expected first result to be query node %d, got %d", node1.ID(), results[0].Node.ID())
 	}
 }
 
@@ -497,16 +497,16 @@ func TestFlatIndexSearchResultsOrdered(t *testing.T) {
 	// Check that results are ordered by distance
 	expectedOrder := []float32{1, 3, 5, 10}
 	for i, expected := range expectedOrder {
-		if results[i].Vector()[0] != expected {
-			t.Errorf("Result %d: expected distance %f, got %f", i, expected, results[i].Vector()[0])
+		if results[i].Node.Vector()[0] != expected {
+			t.Errorf("Result %d: expected distance %f, got %f", i, expected, results[i].Node.Vector()[0])
 		}
 	}
 
 	// Verify distances are in ascending order
 	distance, _ := NewDistance(Euclidean)
 	for i := 1; i < len(results); i++ {
-		d1 := distance.Calculate(query, results[i-1].Vector())
-		d2 := distance.Calculate(query, results[i].Vector())
+		d1 := distance.Calculate(query, results[i-1].Node.Vector())
+		d2 := distance.Calculate(query, results[i].Node.Vector())
 		if d1 > d2 {
 			t.Errorf("Results not properly ordered: distance[%d]=%f > distance[%d]=%f", i-1, d1, i, d2)
 		}

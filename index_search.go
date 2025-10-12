@@ -1,5 +1,11 @@
 package comet
 
+// VectorResult represents a search result for a vector node
+type VectorResult struct {
+	Node  VectorNode
+	Score float32
+}
+
 // VectorSearch encapsulates the search context for the vector index
 type VectorSearch interface {
 	// WithQuery sets the query vector(s) - supports single or batch queries
@@ -22,5 +28,5 @@ type VectorSearch interface {
 	WithThreshold(threshold float32) VectorSearch
 
 	// Execute the search and return the results
-	Execute() ([]VectorNode, error)
+	Execute() ([]VectorResult, error)
 }

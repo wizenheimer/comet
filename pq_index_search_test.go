@@ -74,7 +74,7 @@ func TestPQIndexSearchSimple(t *testing.T) {
 	// Should find vectors close to the query
 	if len(results) > 0 {
 		// First result should be reasonably close
-		firstVec := results[0].Vector()
+		firstVec := results[0].Node.Vector()
 		if len(firstVec) != 8 {
 			t.Errorf("Result vector has wrong dimension: got %d, want 8", len(firstVec))
 		}
@@ -101,7 +101,7 @@ func TestPQIndexSearchWithThreshold(t *testing.T) {
 	// Just verify that results are within threshold (approximately)
 	for _, result := range results {
 		// Can't validate exact distances due to PQ approximation, but ensure we got results
-		if len(result.Vector()) != 8 {
+		if len(result.Node.Vector()) != 8 {
 			t.Errorf("Result has wrong dimension")
 		}
 	}
@@ -517,8 +517,8 @@ func TestPQIndexSearchResultsConsistency(t *testing.T) {
 	}
 
 	for i := range results1 {
-		if results1[i].ID() != results2[i].ID() {
-			t.Errorf("Result %d differs: ID %d vs %d", i, results1[i].ID(), results2[i].ID())
+		if results1[i].Node.ID() != results2[i].Node.ID() {
+			t.Errorf("Result %d differs: ID %d vs %d", i, results1[i].Node.ID(), results2[i].Node.ID())
 		}
 	}
 }
@@ -641,7 +641,7 @@ func TestPQIndexSearchApproximateAccuracy(t *testing.T) {
 
 	// Due to PQ approximation, the exact match might not be returned,
 	// but the result should be close to the query
-	result := results[0].Vector()
+	result := results[0].Node.Vector()
 	if len(result) != 8 {
 		t.Errorf("Result has wrong dimension: got %d, want 8", len(result))
 	}

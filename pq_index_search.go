@@ -70,9 +70,9 @@ func (s *pqIndexSearch) WithThreshold(threshold float32) VectorSearch {
 // using all specified queries (both direct queries and node-based queries).
 //
 // Returns:
-//   - []VectorNode: Search results sorted by distance
+//   - []VectorResult: Search results sorted by distance with scores
 //   - error: Returns error if search configuration is invalid
-func (s *pqIndexSearch) Execute() ([]VectorNode, error) {
+func (s *pqIndexSearch) Execute() ([]VectorResult, error) {
 	// Validate that at least one of queries or nodeIDs is set
 	if len(s.queries) == 0 && len(s.nodeIDs) == 0 {
 		return nil, fmt.Errorf("must specify either queries or node IDs")
@@ -94,7 +94,7 @@ func (s *pqIndexSearch) Execute() ([]VectorNode, error) {
 	}
 
 	// Execute search with all queries
-	var allResults []VectorNode
+	var allResults []VectorResult
 	for _, query := range allQueries {
 		results, err := s.searchSingleQuery(query)
 		if err != nil {
@@ -151,7 +151,7 @@ func (s *pqIndexSearch) lookupNodeVectors() ([][]float32, error) {
 //   - Ksub is centroids per subspace
 //   - dsub is subspace dimension
 //   - n is number of vectors
-func (s *pqIndexSearch) searchSingleQuery(query []float32) ([]VectorNode, error) {
+func (s *pqIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, error) {
 	s.index.mu.RLock()
 	defer s.index.mu.RUnlock()
 
@@ -166,7 +166,7 @@ func (s *pqIndexSearch) searchSingleQuery(query []float32) ([]VectorNode, error)
 	}
 
 	if len(s.index.codes) == 0 {
-		return []VectorNode{}, nil
+		return []VectorResult{}, nil
 	}
 
 	// Preprocess query
@@ -238,9 +238,12 @@ func (s *pqIndexSearch) searchSingleQuery(query []float32) ([]VectorNode, error)
 		k = len(results)
 	}
 
-	finalResults := make([]VectorNode, k)
+	finalResults := make([]VectorResult, k)
 	for i := 0; i < k; i++ {
-		finalResults[i] = results[i].vector
+		finalResults[i] = VectorResult{
+			Node:  results[i].vector,
+			Score: results[i].distance,
+		}
 	}
 
 	return finalResults, nil

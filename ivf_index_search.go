@@ -73,9 +73,9 @@ func (s *ivfIndexSearch) WithThreshold(threshold float32) VectorSearch {
 // using all specified queries (both direct queries and node-based queries).
 //
 // Returns:
-//   - []VectorNode: Search results sorted by distance
+//   - []VectorResult: Search results sorted by distance with scores
 //   - error: Returns error if search configuration is invalid or index not trained
-func (s *ivfIndexSearch) Execute() ([]VectorNode, error) {
+func (s *ivfIndexSearch) Execute() ([]VectorResult, error) {
 	// Validate that at least one of queries or nodeIDs is set
 	if len(s.queries) == 0 && len(s.nodeIDs) == 0 {
 		return nil, fmt.Errorf("must specify either queries or node IDs")
@@ -97,7 +97,7 @@ func (s *ivfIndexSearch) Execute() ([]VectorNode, error) {
 	}
 
 	// Execute search with all queries
-	var allResults []VectorNode
+	var allResults []VectorResult
 	for _, query := range allQueries {
 		results, err := s.searchSingleQuery(query)
 		if err != nil {
@@ -150,7 +150,7 @@ func (s *ivfIndexSearch) lookupNodeVectors() ([][]float32, error) {
 // 4. Sort candidates by distance and return top-k
 //
 // Time Complexity: O(nlist + nprobes × (n/nlist) × dim + candidates × log(candidates))
-func (s *ivfIndexSearch) searchSingleQuery(query []float32) ([]VectorNode, error) {
+func (s *ivfIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, error) {
 	s.index.mu.RLock()
 	defer s.index.mu.RUnlock()
 
@@ -235,9 +235,12 @@ func (s *ivfIndexSearch) searchSingleQuery(query []float32) ([]VectorNode, error
 		k = len(candidates)
 	}
 
-	results := make([]VectorNode, k)
+	results := make([]VectorResult, k)
 	for i := 0; i < k; i++ {
-		results[i] = candidates[i].vector
+		results[i] = VectorResult{
+			Node:  candidates[i].vector,
+			Score: candidates[i].distance,
+		}
 	}
 
 	return results, nil

@@ -156,8 +156,8 @@ func TestHNSWIndexSearchSimple(t *testing.T) {
 	}
 
 	// First result should be [1, 0, 0] (exact match)
-	if !vectorsAlmostEqual(results[0].Vector(), []float32{1, 0, 0}, 0.001) {
-		t.Errorf("Expected first result to be [1, 0, 0], got %v", results[0].Vector())
+	if !vectorsAlmostEqual(results[0].Node.Vector(), []float32{1, 0, 0}, 0.001) {
+		t.Errorf("Expected first result to be [1, 0, 0], got %v", results[0].Node.Vector())
 	}
 }
 
@@ -196,8 +196,8 @@ func TestHNSWIndexSearchExactMatch(t *testing.T) {
 	}
 
 	// Should find exact match
-	if !vectorsAlmostEqual(results[0].Vector(), []float32{4, 5, 6}, 0.001) {
-		t.Errorf("Expected exact match [4, 5, 6], got %v", results[0].Vector())
+	if !vectorsAlmostEqual(results[0].Node.Vector(), []float32{4, 5, 6}, 0.001) {
+		t.Errorf("Expected exact match [4, 5, 6], got %v", results[0].Node.Vector())
 	}
 }
 
@@ -281,7 +281,7 @@ func TestHNSWIndexSearchWithThreshold(t *testing.T) {
 
 	// Verify all results are within threshold
 	for _, result := range results {
-		dist := euclideanDistance(query, result.Vector())
+		dist := euclideanDistance(query, result.Node.Vector())
 		if dist > 2.0 {
 			t.Errorf("Result distance %.2f exceeds threshold 2.0", dist)
 		}
@@ -363,8 +363,8 @@ func TestHNSWIndexSearchByNode(t *testing.T) {
 	}
 
 	// First result should be node1 itself (distance 0)
-	if results[0].ID() != node1.ID() {
-		t.Errorf("Expected first result to be query node, got ID %d", results[0].ID())
+	if results[0].Node.ID() != node1.ID() {
+		t.Errorf("Expected first result to be query node, got ID %d", results[0].Node.ID())
 	}
 }
 
@@ -704,7 +704,7 @@ func TestHNSWIndexSearchSingleNode(t *testing.T) {
 		t.Errorf("Expected 1 result, got %d", len(results))
 	}
 
-	if results[0].ID() != node.ID() {
+	if results[0].Node.ID() != node.ID() {
 		t.Error("Search should return the single node")
 	}
 }
@@ -800,8 +800,8 @@ func TestHNSWIndexSearchCosine(t *testing.T) {
 
 	// Should find [1, 0, 0] as it's parallel (cosine distance = 0)
 	expected := []float32{1, 0, 0}
-	if !vectorsAlmostEqual(results[0].Vector(), expected, 0.001) {
-		t.Errorf("Expected result %v, got %v", expected, results[0].Vector())
+	if !vectorsAlmostEqual(results[0].Node.Vector(), expected, 0.001) {
+		t.Errorf("Expected result %v, got %v", expected, results[0].Node.Vector())
 	}
 }
 
@@ -934,7 +934,7 @@ func TestHNSWIndexSearchAccuracy(t *testing.T) {
 	// Results should be ordered by distance
 	prevDist := float32(0)
 	for _, result := range results {
-		dist := euclideanDistance(query, result.Vector())
+		dist := euclideanDistance(query, result.Node.Vector())
 		if dist < prevDist {
 			t.Errorf("Results not ordered by distance: prev=%.2f, curr=%.2f", prevDist, dist)
 		}
@@ -942,8 +942,8 @@ func TestHNSWIndexSearchAccuracy(t *testing.T) {
 	}
 
 	// First result should be closest ([0.5, 0, 0])
-	if !vectorsAlmostEqual(results[0].Vector(), []float32{0.5, 0, 0}, 0.001) {
-		t.Errorf("Expected closest result [0.5, 0, 0], got %v", results[0].Vector())
+	if !vectorsAlmostEqual(results[0].Node.Vector(), []float32{0.5, 0, 0}, 0.001) {
+		t.Errorf("Expected closest result [0.5, 0, 0], got %v", results[0].Node.Vector())
 	}
 }
 
@@ -990,7 +990,7 @@ func TestHNSWIndexSearchRecall(t *testing.T) {
 
 	// Verify results are reasonably close
 	for _, result := range results {
-		dist := euclideanDistance(query, result.Vector())
+		dist := euclideanDistance(query, result.Node.Vector())
 		if dist > 500 { // Reasonable bound for this data
 			t.Errorf("Result too far: distance %.2f", dist)
 		}
@@ -1039,8 +1039,8 @@ func TestHNSWIndexSearchWithEfSearchDefault(t *testing.T) {
 	}
 
 	// Should find exact match as first result
-	if !vectorsAlmostEqual(results[0].Vector(), []float32{1, 0, 0}, 0.001) {
-		t.Errorf("Expected first result to be [1, 0, 0], got %v", results[0].Vector())
+	if !vectorsAlmostEqual(results[0].Node.Vector(), []float32{1, 0, 0}, 0.001) {
+		t.Errorf("Expected first result to be [1, 0, 0], got %v", results[0].Node.Vector())
 	}
 }
 
@@ -1159,7 +1159,7 @@ func TestHNSWIndexSearchWithEfSearchRecall(t *testing.T) {
 	}
 
 	// First result should be exact match in both cases
-	if !vectorsAlmostEqual(resultsHigh[0].Vector(), query, 0.001) {
+	if !vectorsAlmostEqual(resultsHigh[0].Node.Vector(), query, 0.001) {
 		t.Errorf("Expected exact match with high efSearch")
 	}
 }
@@ -1200,8 +1200,8 @@ func TestHNSWIndexSearchWithEfSearchZero(t *testing.T) {
 	}
 
 	// Should find exact match
-	if !vectorsAlmostEqual(results[0].Vector(), []float32{1, 0, 0}, 0.001) {
-		t.Errorf("Expected first result to be [1, 0, 0], got %v", results[0].Vector())
+	if !vectorsAlmostEqual(results[0].Node.Vector(), []float32{1, 0, 0}, 0.001) {
+		t.Errorf("Expected first result to be [1, 0, 0], got %v", results[0].Node.Vector())
 	}
 }
 
@@ -1241,8 +1241,8 @@ func TestHNSWIndexSearchWithEfSearchNegative(t *testing.T) {
 	}
 
 	// Should find exact match
-	if !vectorsAlmostEqual(results[0].Vector(), []float32{1, 0, 0}, 0.001) {
-		t.Errorf("Expected first result to be [1, 0, 0], got %v", results[0].Vector())
+	if !vectorsAlmostEqual(results[0].Node.Vector(), []float32{1, 0, 0}, 0.001) {
+		t.Errorf("Expected first result to be [1, 0, 0], got %v", results[0].Node.Vector())
 	}
 }
 
@@ -1287,7 +1287,7 @@ func TestHNSWIndexSearchWithEfSearchChaining(t *testing.T) {
 
 	// All results should be within threshold distance
 	for _, result := range results {
-		dist := euclideanDistance(query, result.Vector())
+		dist := euclideanDistance(query, result.Node.Vector())
 		if dist > 2.5 {
 			t.Errorf("Result distance %.2f exceeds threshold 2.5", dist)
 		}
