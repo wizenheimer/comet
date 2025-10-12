@@ -9,6 +9,11 @@ import (
 var _ VectorSearch = (*flatIndexSearch)(nil)
 
 // flatIndexSearch implements the VectorSearch interface for flat index.
+//
+// Flat index performs exhaustive search:
+//   - Compares query against every vector in the index
+//   - Guarantees 100% recall (perfect accuracy)
+//   - No training required, no approximation
 type flatIndexSearch struct {
 	index     *FlatIndex
 	queries   [][]float32
@@ -31,19 +36,27 @@ func (s *flatIndexSearch) WithNode(nodeIDs ...uint32) VectorSearch {
 	return s
 }
 
-// WithK sets the number of results to return
+// WithK sets the number of results to return.
+// Defaults to all vectors if not set or k exceeds vector count.
 func (s *flatIndexSearch) WithK(k int) VectorSearch {
 	s.k = k
 	return s
 }
 
-// WithNProbes sets the number of probes to use for the search
-// This is a no-op for flat index since it doesn't use probes
+// WithNProbes is a no-op for flat index (nprobes is used by IVF-based indexes).
+// Flat index always performs exhaustive search.
 func (s *flatIndexSearch) WithNProbes(nProbes int) VectorSearch {
 	return s
 }
 
-// WithThreshold sets a distance threshold for results (optional)
+// WithEfSearch is a no-op for flat index (efSearch is used by HNSW).
+// Flat index always performs exhaustive search.
+func (s *flatIndexSearch) WithEfSearch(efSearch int) VectorSearch {
+	return s
+}
+
+// WithThreshold sets a distance threshold for results (optional).
+// Only results with distance <= threshold will be returned.
 func (s *flatIndexSearch) WithThreshold(threshold float32) VectorSearch {
 	s.threshold = threshold
 	return s
@@ -92,6 +105,9 @@ func (s *flatIndexSearch) Execute() ([]VectorNode, error) {
 }
 
 // lookupNodeVectors converts node IDs to their corresponding vectors.
+//
+// Searches through the flat index to find vectors by ID.
+// Returns error if any node ID is not found.
 func (s *flatIndexSearch) lookupNodeVectors() ([][]float32, error) {
 	s.index.mu.RLock()
 	defer s.index.mu.RUnlock()
@@ -115,19 +131,23 @@ func (s *flatIndexSearch) lookupNodeVectors() ([][]float32, error) {
 	return queries, nil
 }
 
-// searchSingleQuery performs the core kNN search for a single query vector.
+// searchSingleQuery performs exhaustive kNN search for a single query vector.
 //
-// This is the exhaustive search algorithm:
-// 1. Preprocess the query vector (normalize for cosine, no-op for euclidean)
-// 2. Calculate distance from preprocessed query to EVERY preprocessed vector in the index
-// 3. Sort all results by distance
-// 4. Return top k results
+// EXHAUSTIVE SEARCH ALGORITHM:
+//  1. Preprocess the query vector (normalize for cosine, no-op for euclidean)
+//  2. Calculate distance from preprocessed query to EVERY preprocessed vector in the index
+//  3. Filter by threshold if set
+//  4. Sort all results by distance (ascending - smaller is more similar)
+//  5. Return top k results
 //
-// For cosine distance, since both query and stored vectors are normalized,
-// the distance calculation is just: 1 - dot(query, vector)
+// OPTIMIZATION FOR COSINE DISTANCE:
+// Since both query and stored vectors are normalized during preprocessing,
+// the distance calculation is optimized to: 1 - dot(query, vector)
 // This eliminates the need for norm calculations and divisions during search.
 //
-// Time Complexity: O(m*n + n*log(n)) where m=dimensionality, n=number of vectors
+// Time Complexity: O(n × dim + n × log(n)) where:
+//   - n is the number of vectors
+//   - dim is the vector dimensionality
 func (s *flatIndexSearch) searchSingleQuery(query []float32) ([]VectorNode, error) {
 	s.index.mu.RLock()
 	defer s.index.mu.RUnlock()

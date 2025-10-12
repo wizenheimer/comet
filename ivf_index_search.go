@@ -5,7 +5,15 @@ import (
 	"sort"
 )
 
+// Compile-time checks to ensure ivfIndexSearch implements VectorSearch
+var _ VectorSearch = (*ivfIndexSearch)(nil)
+
 // ivfIndexSearch implements the VectorSearch interface for IVF index.
+//
+// IVF (Inverted File) search performs coarse-to-fine search:
+//   - Finds nprobes nearest cluster centroids
+//   - Searches only vectors in those clusters
+//   - Returns top k from candidates
 type ivfIndexSearch struct {
 	index     *IVFIndex
 	queries   [][]float32
@@ -29,27 +37,44 @@ func (s *ivfIndexSearch) WithNode(nodeIDs ...uint32) VectorSearch {
 	return s
 }
 
-// WithK sets the number of results to return
+// WithK sets the number of results to return.
+// Defaults to 10 if not set.
 func (s *ivfIndexSearch) WithK(k int) VectorSearch {
 	s.k = k
 	return s
 }
 
 // WithNProbes sets the number of inverted lists to probe during search.
+//
 // Higher nprobes = better recall but slower search.
-// Typical values: 1 to sqrt(nlist)
+// Typical values: 1 to sqrt(nlist).
+// If not set or invalid, defaults to nlist (exhaustive search).
 func (s *ivfIndexSearch) WithNProbes(nprobes int) VectorSearch {
 	s.nprobes = nprobes
 	return s
 }
 
-// WithThreshold sets a distance threshold for results (optional)
+// WithEfSearch is a no-op for IVF index (efSearch is used by HNSW).
+// IVF uses nprobes parameter instead.
+func (s *ivfIndexSearch) WithEfSearch(efSearch int) VectorSearch {
+	return s
+}
+
+// WithThreshold sets a distance threshold for results (optional).
+// Only results with distance <= threshold will be returned.
 func (s *ivfIndexSearch) WithThreshold(threshold float32) VectorSearch {
 	s.threshold = threshold
 	return s
 }
 
 // Execute performs the actual search and returns results.
+//
+// This method validates the search configuration and then executes the search
+// using all specified queries (both direct queries and node-based queries).
+//
+// Returns:
+//   - []VectorNode: Search results sorted by distance
+//   - error: Returns error if search configuration is invalid or index not trained
 func (s *ivfIndexSearch) Execute() ([]VectorNode, error) {
 	// Validate that at least one of queries or nodeIDs is set
 	if len(s.queries) == 0 && len(s.nodeIDs) == 0 {
@@ -85,6 +110,9 @@ func (s *ivfIndexSearch) Execute() ([]VectorNode, error) {
 }
 
 // lookupNodeVectors converts node IDs to their corresponding vectors.
+//
+// Searches through all inverted lists to find vectors by ID.
+// Returns error if any node ID is not found.
 func (s *ivfIndexSearch) lookupNodeVectors() ([][]float32, error) {
 	s.index.mu.RLock()
 	defer s.index.mu.RUnlock()

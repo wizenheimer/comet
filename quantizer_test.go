@@ -11,9 +11,9 @@ import (
 
 func TestNewQuantizer(t *testing.T) {
 	tests := []struct {
-		name        string
-		qType       QuantizerType
-		expectError bool
+		name         string
+		qType        QuantizerType
+		expectError  bool
 		expectedType QuantizerType
 	}{
 		{
@@ -44,7 +44,7 @@ func TestNewQuantizer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			q, err := NewQuantizer(tt.qType)
-			
+
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error but got none")
@@ -135,14 +135,14 @@ func TestFullPrecisionQuantizer_Isolation(t *testing.T) {
 	q := &FullPrecisionQuantizer{}
 
 	original := []float32{1.0, 2.0, 3.0}
-	
+
 	quantized, err := q.Quantize(original)
 	if err != nil {
 		t.Fatalf("Quantize error: %v", err)
 	}
 
 	quantizedVec := quantized.([]float32)
-	
+
 	// Modify the quantized vector
 	quantizedVec[0] = 999.0
 
@@ -255,7 +255,7 @@ func TestHalfPrecisionQuantizer_QuantizeDequantize(t *testing.T) {
 			for i := range tc.vector {
 				diff := math.Abs(float64(dequantized[i] - tc.vector[i]))
 				if diff > float64(tc.tolerance) {
-					t.Errorf("value at index %d: expected ~%f, got %f (diff: %f)", 
+					t.Errorf("value at index %d: expected ~%f, got %f (diff: %f)",
 						i, tc.vector[i], dequantized[i], diff)
 				}
 			}
@@ -325,7 +325,7 @@ func TestInt8Quantizer_QuantizeBeforeTraining(t *testing.T) {
 	q := &Int8Quantizer{}
 
 	vector := []float32{1.0, 2.0, 3.0}
-	
+
 	_, err := q.Quantize(vector)
 	if err == nil {
 		t.Error("expected error when quantizing before training")
@@ -336,7 +336,7 @@ func TestInt8Quantizer_DequantizeBeforeTraining(t *testing.T) {
 	q := &Int8Quantizer{}
 
 	quantized := []int8{10, 20, 30}
-	
+
 	_, err := q.Dequantize(quantized)
 	if err == nil {
 		t.Error("expected error when dequantizing before training")
@@ -417,7 +417,7 @@ func TestInt8Quantizer_QuantizeDequantize(t *testing.T) {
 			for i := range tc.vector {
 				diff := math.Abs(float64(dequantized[i] - tc.vector[i]))
 				if diff > float64(tc.tolerance) {
-					t.Errorf("value at index %d: expected ~%f, got %f (diff: %f, quantized: %d)", 
+					t.Errorf("value at index %d: expected ~%f, got %f (diff: %f, quantized: %d)",
 						i, tc.vector[i], dequantized[i], diff, quantizedVec[i])
 				}
 			}
@@ -685,4 +685,3 @@ func BenchmarkInt8Quantizer_Dequantize(b *testing.B) {
 		_, _ = q.Dequantize(quantized)
 	}
 }
-

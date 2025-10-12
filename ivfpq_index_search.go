@@ -10,6 +10,11 @@ import (
 var _ VectorSearch = (*ivfpqIndexSearch)(nil)
 
 // ivfpqIndexSearch implements VectorSearch for IVFPQ.
+//
+// IVFPQ combines IVF clustering with PQ compression:
+//   - Uses IVF for coarse search (nprobes nearest clusters)
+//   - Uses PQ for fast approximate distance computation within clusters
+//   - Provides best of both worlds: speed and memory efficiency
 type ivfpqIndexSearch struct {
 	index     *IVFPQIndex
 	queries   [][]float32
@@ -33,16 +38,31 @@ func (s *ivfpqIndexSearch) WithNode(nodeIDs ...uint32) VectorSearch {
 	return s
 }
 
+// WithK sets the number of results to return.
+// Defaults to 10 if not set.
 func (s *ivfpqIndexSearch) WithK(k int) VectorSearch {
 	s.k = k
 	return s
 }
 
+// WithNProbes sets the number of inverted lists to probe during search.
+//
+// Higher nprobes = better recall but slower search.
+// Typical values: 1 to sqrt(nlist).
+// If not set or invalid, defaults to nlist (exhaustive search).
 func (s *ivfpqIndexSearch) WithNProbes(nprobes int) VectorSearch {
 	s.nprobes = nprobes
 	return s
 }
 
+// WithEfSearch is a no-op for IVFPQ index (efSearch is used by HNSW).
+// IVFPQ uses nprobes parameter instead.
+func (s *ivfpqIndexSearch) WithEfSearch(efSearch int) VectorSearch {
+	return s
+}
+
+// WithThreshold sets a distance threshold for results (optional).
+// Only results with distance <= threshold will be returned.
 func (s *ivfpqIndexSearch) WithThreshold(threshold float32) VectorSearch {
 	s.threshold = threshold
 	return s
@@ -91,6 +111,9 @@ func (s *ivfpqIndexSearch) Execute() ([]VectorNode, error) {
 }
 
 // lookupNodeVectors converts node IDs to their corresponding vectors.
+//
+// Searches through all inverted lists to find vectors by ID.
+// Returns error if any node ID is not found.
 func (s *ivfpqIndexSearch) lookupNodeVectors() ([][]float32, error) {
 	s.index.mu.RLock()
 	defer s.index.mu.RUnlock()
@@ -119,15 +142,28 @@ func (s *ivfpqIndexSearch) lookupNodeVectors() ([][]float32, error) {
 	return queries, nil
 }
 
-// searchSingleQuery performs IVFPQ search with asymmetric distance.
+// searchSingleQuery performs IVFPQ search with asymmetric distance for a single query.
+//
+// IVFPQ TWO-LEVEL QUANTIZATION:
+// - Level 1 (IVF): Coarse quantization using cluster centroids
+// - Level 2 (PQ): Fine quantization of residuals within clusters
 //
 // Algorithm:
-//  1. Find nprobe nearest IVF centroids
+//  1. Find nprobes nearest IVF centroids (coarse search)
 //  2. For each probed cluster:
 //     a. Compute query residual = query - centroid
-//     b. Build PQ distance table for query residual
-//     c. Compute distances using table lookups
-//  3. Sort and return top k
+//     b. Build PQ distance table (M × Ksub) for query residual
+//     c. For each vector in cluster: compute distance using table lookups
+//  3. Collect all candidates from probed clusters
+//  4. Filter by threshold, sort by distance, and return top k
+//
+// Time Complexity: O(nlist + nprobes × (M × Ksub × dsub + n/nlist)) where:
+//   - nlist is number of IVF clusters
+//   - nprobes is number of clusters to search
+//   - M is number of PQ subspaces
+//   - Ksub is centroids per subspace
+//   - dsub is subspace dimension
+//   - n is total number of vectors
 func (s *ivfpqIndexSearch) searchSingleQuery(query []float32) ([]VectorNode, error) {
 	s.index.mu.RLock()
 	defer s.index.mu.RUnlock()
@@ -226,7 +262,13 @@ func (s *ivfpqIndexSearch) searchSingleQuery(query []float32) ([]VectorNode, err
 	return finalResults, nil
 }
 
-// computeDistanceTables builds distance table for query residual.
+// computeDistanceTables builds distance tables for query residual.
+//
+// For each subspace m:
+//   - Extracts the query subvector
+//   - Computes L2 squared distances to all Ksub centroids
+//
+// Returns M × Ksub distance table for fast lookups during search.
 func (s *ivfpqIndexSearch) computeDistanceTables(queryResidual []float32) [][]float32 {
 	distTables := make([][]float32, s.index.M)
 
@@ -254,7 +296,13 @@ func (s *ivfpqIndexSearch) computeDistanceTables(queryResidual []float32) [][]fl
 	return distTables
 }
 
-// asymmetricDistance computes distance using PQ code and distance tables.
+// asymmetricDistance computes approximate distance using PQ code and distance tables.
+//
+// For each subspace m:
+//   - Uses code[m] to look up pre-computed distance from table
+//   - Sums squared distances across all subspaces
+//
+// Returns L2 distance (square root of sum).
 func (s *ivfpqIndexSearch) asymmetricDistance(distTables [][]float32, code []uint8) float32 {
 	dist := float32(0)
 	for m := 0; m < s.index.M; m++ {

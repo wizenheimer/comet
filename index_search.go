@@ -14,6 +14,10 @@ type VectorSearch interface {
 	// WithNProbes sets the number of probes to use for the search
 	WithNProbes(nProbes int) VectorSearch
 
+	// WithEfSearch sets the efSearch parameter for HNSW search (no-op for other indexes)
+	// Allows per-search override of the index's default efSearch value
+	WithEfSearch(efSearch int) VectorSearch
+
 	// WithThreshold sets a distance threshold for results (optional)
 	WithThreshold(threshold float32) VectorSearch
 

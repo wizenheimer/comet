@@ -10,6 +10,11 @@ import (
 var _ VectorSearch = (*pqIndexSearch)(nil)
 
 // pqIndexSearch implements the VectorSearch interface for PQ index.
+//
+// PQ (Product Quantization) search performs approximate distance computation:
+//   - Builds distance tables for query subvectors
+//   - Uses table lookups to compute approximate distances
+//   - Returns top k from all candidates
 type pqIndexSearch struct {
 	index     *PQIndex
 	queries   [][]float32
@@ -32,16 +37,28 @@ func (s *pqIndexSearch) WithNode(nodeIDs ...uint32) VectorSearch {
 	return s
 }
 
+// WithK sets the number of results to return.
+// Defaults to 10 if not set.
 func (s *pqIndexSearch) WithK(k int) VectorSearch {
 	s.k = k
 	return s
 }
 
+// WithNProbes is a no-op for PQ (nprobes is used by IVF-based indexes).
+// PQ performs exhaustive search with approximate distances.
 func (s *pqIndexSearch) WithNProbes(nprobes int) VectorSearch {
 	// PQ doesn't use nprobes, ignored
 	return s
 }
 
+// WithEfSearch is a no-op for PQ index (efSearch is used by HNSW).
+// PQ performs exhaustive search with approximate distances.
+func (s *pqIndexSearch) WithEfSearch(efSearch int) VectorSearch {
+	return s
+}
+
+// WithThreshold sets a distance threshold for results (optional).
+// Only results with distance <= threshold will be returned.
 func (s *pqIndexSearch) WithThreshold(threshold float32) VectorSearch {
 	s.threshold = threshold
 	return s
@@ -90,6 +107,8 @@ func (s *pqIndexSearch) Execute() ([]VectorNode, error) {
 }
 
 // lookupNodeVectors converts node IDs to their corresponding vectors.
+//
+// Returns error if any node ID is not found.
 func (s *pqIndexSearch) lookupNodeVectors() ([][]float32, error) {
 	s.index.mu.RLock()
 	defer s.index.mu.RUnlock()
@@ -113,12 +132,25 @@ func (s *pqIndexSearch) lookupNodeVectors() ([][]float32, error) {
 	return queries, nil
 }
 
-// searchSingleQuery performs asymmetric PQ distance search.
+// searchSingleQuery performs asymmetric PQ distance search for a single query.
+//
+// ASYMMETRIC DISTANCE:
+// - Query: full precision (not quantized)
+// - Database vectors: quantized to PQ codes
+// - This gives better accuracy than symmetric distance
 //
 // Algorithm:
-//  1. Build distance tables (M × K)
-//  2. For each code, look up distances and sum
-//  3. Sort and return top k
+//  1. Build distance tables (M × Ksub)
+//     - For each subspace m: compute distances from query subvector to all centroids
+//  2. For each vector's PQ code: look up pre-computed distances and sum
+//  3. Take square root for final L2 distance
+//  4. Filter by threshold, sort, and return top k
+//
+// Time Complexity: O(M × Ksub × dsub + n) where:
+//   - M is number of subspaces
+//   - Ksub is centroids per subspace
+//   - dsub is subspace dimension
+//   - n is number of vectors
 func (s *pqIndexSearch) searchSingleQuery(query []float32) ([]VectorNode, error) {
 	s.index.mu.RLock()
 	defer s.index.mu.RUnlock()
