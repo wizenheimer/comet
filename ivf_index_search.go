@@ -22,6 +22,7 @@ type ivfIndexSearch struct {
 	nprobes         int
 	threshold       float32
 	aggregationKind ScoreAggregationKind
+	cutoff          int
 }
 
 // WithQuery sets the query vector(s) - supports single or batch queries.
@@ -72,6 +73,13 @@ func (s *ivfIndexSearch) WithThreshold(threshold float32) VectorSearch {
 // appears in results from multiple queries or nodes.
 func (s *ivfIndexSearch) WithScoreAggregation(kind ScoreAggregationKind) VectorSearch {
 	s.aggregationKind = kind
+	return s
+}
+
+// WithCutoff sets the autocut parameter for automatically determining result cutoff.
+// A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
+func (s *ivfIndexSearch) WithCutoff(cutoff int) VectorSearch {
+	s.cutoff = cutoff
 	return s
 }
 
@@ -132,13 +140,11 @@ func (s *ivfIndexSearch) Execute() ([]VectorResult, error) {
 	// Aggregate results (deduplicates by node ID and combines scores)
 	aggregatedResults := aggregation.Aggregate(allResults)
 
-	// Apply k limit
-	k := s.k
-	if k <= 0 || k > len(aggregatedResults) {
-		k = len(aggregatedResults)
-	}
+	// Apply k limit and autocut
+	results := limitResults(aggregatedResults, s.k)
+	results = autocutResults(results, s.cutoff)
 
-	return aggregatedResults[:k], nil
+	return results, nil
 }
 
 // lookupNodeVectors converts node IDs to their corresponding vectors.
@@ -262,10 +268,7 @@ func (s *ivfIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, err
 	})
 
 	// Take top k results
-	k := s.k
-	if k > len(candidates) {
-		k = len(candidates)
-	}
+	k := sanitizeK(s.k, len(candidates))
 
 	results := make([]VectorResult, k)
 	for i := 0; i < k; i++ {

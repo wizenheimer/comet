@@ -56,6 +56,7 @@ type hnswIndexSearch struct {
 	efSearch        int // Per-search override, 0 means use index default
 	threshold       float32
 	aggregationKind ScoreAggregationKind
+	cutoff          int
 }
 
 // WithQuery sets the query vector(s) - supports single or batch queries.
@@ -109,6 +110,13 @@ func (s *hnswIndexSearch) WithThreshold(threshold float32) VectorSearch {
 // appears in results from multiple queries or nodes.
 func (s *hnswIndexSearch) WithScoreAggregation(kind ScoreAggregationKind) VectorSearch {
 	s.aggregationKind = kind
+	return s
+}
+
+// WithCutoff sets the autocut parameter for automatically determining result cutoff.
+// A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
+func (s *hnswIndexSearch) WithCutoff(cutoff int) VectorSearch {
+	s.cutoff = cutoff
 	return s
 }
 
@@ -169,13 +177,11 @@ func (s *hnswIndexSearch) Execute() ([]VectorResult, error) {
 	// Aggregate results (deduplicates by node ID and combines scores)
 	aggregatedResults := aggregation.Aggregate(allResults)
 
-	// Apply k limit
-	k := s.k
-	if k <= 0 || k > len(aggregatedResults) {
-		k = len(aggregatedResults)
-	}
+	// Apply k limit and autocut
+	results := limitResults(aggregatedResults, s.k)
+	results = autocutResults(results, s.cutoff)
 
-	return aggregatedResults[:k], nil
+	return results, nil
 }
 
 // lookupNodeVectors retrieves vectors for the specified node IDs.
@@ -303,10 +309,7 @@ func (s *hnswIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, er
 	})
 
 	// Return top k
-	k := s.k
-	if k > len(results) {
-		k = len(results)
-	}
+	k := sanitizeK(s.k, len(results))
 
 	finalResults := make([]VectorResult, k)
 	for i := 0; i < k; i++ {

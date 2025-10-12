@@ -221,8 +221,9 @@ func (idx *FlatIndex) Flush() error {
 //   - VectorSearch: A new search builder ready to be configured
 func (idx *FlatIndex) NewSearch() VectorSearch {
 	return &flatIndexSearch{
-		index: idx,
-		k:     10, // Default k value
+		index:  idx,
+		k:      10, // Default k value
+		cutoff: -1, // Default no cutoff
 	}
 }
 

@@ -304,8 +304,9 @@ func (idx *PQIndex) Flush() error {
 // NewSearch creates a new search builder.
 func (idx *PQIndex) NewSearch() VectorSearch {
 	return &pqIndexSearch{
-		index: idx,
-		k:     10,
+		index:  idx,
+		k:      10,
+		cutoff: -1, // Default no cutoff
 	}
 }
 

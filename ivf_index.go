@@ -316,6 +316,7 @@ func (idx *IVFIndex) NewSearch() VectorSearch {
 		index:   idx,
 		k:       10,                                 // Default k
 		nprobes: int(math.Sqrt(float64(idx.nlist))), // Default nprobes = sqrt(nlist)
+		cutoff:  -1,                                 // Default no cutoff
 	}
 }
 

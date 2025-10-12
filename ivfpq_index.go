@@ -338,6 +338,7 @@ func (idx *IVFPQIndex) NewSearch() VectorSearch {
 		index:   idx,
 		k:       10,
 		nprobes: int(math.Sqrt(float64(idx.nlist))),
+		cutoff:  -1, // Default no cutoff
 	}
 }
 

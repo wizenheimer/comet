@@ -23,6 +23,7 @@ type ivfpqIndexSearch struct {
 	nprobes         int
 	threshold       float32
 	aggregationKind ScoreAggregationKind
+	cutoff          int
 }
 
 // WithQuery sets the query vector(s) - supports single or batch queries.
@@ -73,6 +74,13 @@ func (s *ivfpqIndexSearch) WithThreshold(threshold float32) VectorSearch {
 // appears in results from multiple queries or nodes.
 func (s *ivfpqIndexSearch) WithScoreAggregation(kind ScoreAggregationKind) VectorSearch {
 	s.aggregationKind = kind
+	return s
+}
+
+// WithCutoff sets the autocut parameter for automatically determining result cutoff.
+// A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
+func (s *ivfpqIndexSearch) WithCutoff(cutoff int) VectorSearch {
+	s.cutoff = cutoff
 	return s
 }
 
@@ -133,13 +141,11 @@ func (s *ivfpqIndexSearch) Execute() ([]VectorResult, error) {
 	// Aggregate results (deduplicates by node ID and combines scores)
 	aggregatedResults := aggregation.Aggregate(allResults)
 
-	// Apply k limit
-	k := s.k
-	if k <= 0 || k > len(aggregatedResults) {
-		k = len(aggregatedResults)
-	}
+	// Apply k limit and autocut
+	results := limitResults(aggregatedResults, s.k)
+	results = autocutResults(results, s.cutoff)
 
-	return aggregatedResults[:k], nil
+	return results, nil
 }
 
 // lookupNodeVectors converts node IDs to their corresponding vectors.
@@ -281,10 +287,7 @@ func (s *ivfpqIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, e
 		return results[i].distance < results[j].distance
 	})
 
-	k := s.k
-	if k > len(results) {
-		k = len(results)
-	}
+	k := sanitizeK(s.k, len(results))
 
 	finalResults := make([]VectorResult, k)
 	for i := 0; i < k; i++ {

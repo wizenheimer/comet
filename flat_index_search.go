@@ -21,6 +21,7 @@ type flatIndexSearch struct {
 	k               int
 	threshold       float32
 	aggregationKind ScoreAggregationKind
+	cutoff          int
 }
 
 // WithQuery sets the query vector(s) - supports single or batch queries.
@@ -67,6 +68,13 @@ func (s *flatIndexSearch) WithThreshold(threshold float32) VectorSearch {
 // appears in results from multiple queries or nodes.
 func (s *flatIndexSearch) WithScoreAggregation(kind ScoreAggregationKind) VectorSearch {
 	s.aggregationKind = kind
+	return s
+}
+
+// WithCutoff sets the autocut parameter for automatically determining result cutoff.
+// A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
+func (s *flatIndexSearch) WithCutoff(cutoff int) VectorSearch {
+	s.cutoff = cutoff
 	return s
 }
 
@@ -127,13 +135,11 @@ func (s *flatIndexSearch) Execute() ([]VectorResult, error) {
 	// Aggregate results (deduplicates by node ID and combines scores)
 	aggregatedResults := aggregation.Aggregate(allResults)
 
-	// Apply k limit
-	k := s.k
-	if k <= 0 || k > len(aggregatedResults) {
-		k = len(aggregatedResults)
-	}
+	// Apply k limit and autocut
+	results := limitResults(aggregatedResults, s.k)
+	results = autocutResults(results, s.cutoff)
 
-	return aggregatedResults[:k], nil
+	return results, nil
 }
 
 // lookupNodeVectors converts node IDs to their corresponding vectors.
@@ -190,10 +196,7 @@ func (s *flatIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, er
 	}
 
 	// Sanitize k
-	k := s.k
-	if k <= 0 || k > len(s.index.vectors) {
-		k = len(s.index.vectors)
-	}
+	k := sanitizeK(s.k, len(s.index.vectors))
 
 	// Preprocess the query according to the distance metric
 	// - For cosine: creates normalized copy (returns error if zero vector)
@@ -230,9 +233,7 @@ func (s *flatIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, er
 	})
 
 	// Take top k results
-	if k > len(results) {
-		k = len(results)
-	}
+	k = sanitizeK(k, len(results))
 
 	// Convert to VectorResult slice with scores
 	finalResults := make([]VectorResult, k)

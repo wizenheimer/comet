@@ -431,8 +431,9 @@ func (idx *HNSWIndex) Flush() error {
 // NewSearch creates a new search builder.
 func (idx *HNSWIndex) NewSearch() VectorSearch {
 	return &hnswIndexSearch{
-		index: idx,
-		k:     10,
+		index:  idx,
+		k:      10,
+		cutoff: -1, // Default no cutoff
 	}
 }
 

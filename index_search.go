@@ -31,6 +31,10 @@ type VectorSearch interface {
 	// appears in results from multiple queries or nodes (defaults to Sum)
 	WithScoreAggregation(kind ScoreAggregationKind) VectorSearch
 
+	// WithCutoff sets the autocut parameter for automatically determining result cutoff.
+	// A value of -1 (default) disables autocut. Otherwise, specifies number of extrema to find.
+	WithCutoff(cutoff int) VectorSearch
+
 	// Execute the search and return the results
 	Execute() ([]VectorResult, error)
 }
