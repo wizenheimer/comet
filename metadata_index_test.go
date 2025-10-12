@@ -1,0 +1,528 @@
+package comet
+
+import (
+	"fmt"
+	"sort"
+	"testing"
+)
+
+// TestNewRoaringMetadataIndex tests the creation of a new metadata index
+func TestNewRoaringMetadataIndex(t *testing.T) {
+	idx := NewRoaringMetadataIndex()
+
+	if idx == nil {
+		t.Fatal("NewRoaringMetadataIndex() returned nil")
+	}
+
+	if idx.categorical == nil {
+		t.Error("categorical map not initialized")
+	}
+
+	if idx.numeric == nil {
+		t.Error("numeric map not initialized")
+	}
+
+	if idx.allDocs == nil {
+		t.Error("allDocs bitmap not initialized")
+	}
+}
+
+// TestMetadataIndexAdd tests adding nodes to the index
+func TestMetadataIndexAdd(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata map[string]interface{}
+		wantErr  bool
+		errMsg   string
+	}{
+		{
+			name: "valid metadata with all types",
+			metadata: map[string]interface{}{
+				"category": "electronics",
+				"price":    100,
+				"rating":   4.5,
+				"in_stock": true,
+			},
+			wantErr: false,
+		},
+		{
+			name: "metadata with int64",
+			metadata: map[string]interface{}{
+				"user_id": int64(123456789),
+				"count":   int64(42),
+			},
+			wantErr: false,
+		},
+		{
+			name: "metadata with float64",
+			metadata: map[string]interface{}{
+				"score":  9.99,
+				"rating": 4.75,
+			},
+			wantErr: false,
+		},
+		{
+			name: "metadata with boolean",
+			metadata: map[string]interface{}{
+				"active":   true,
+				"verified": false,
+			},
+			wantErr: false,
+		},
+		{
+			name: "metadata with string",
+			metadata: map[string]interface{}{
+				"name":     "Product A",
+				"category": "books",
+			},
+			wantErr: false,
+		},
+		{
+			name: "unsupported type",
+			metadata: map[string]interface{}{
+				"invalid": []int{1, 2, 3},
+			},
+			wantErr: true,
+			errMsg:  "unsupported type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			idx := NewRoaringMetadataIndex()
+			node := NewMetadataNodeWithID(1, tt.metadata)
+
+			err := idx.Add(*node)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("Add() expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Add() unexpected error: %v", err)
+				return
+			}
+
+			// Verify document was added to allDocs
+			if !idx.allDocs.Contains(1) {
+				t.Error("Document not added to allDocs bitmap")
+			}
+		})
+	}
+}
+
+// TestMetadataIndexAddMultiple tests adding multiple nodes
+func TestMetadataIndexAddMultiple(t *testing.T) {
+	idx := NewRoaringMetadataIndex()
+
+	nodes := []*MetadataNode{
+		NewMetadataNodeWithID(1, map[string]interface{}{"category": "electronics", "price": 100}),
+		NewMetadataNodeWithID(2, map[string]interface{}{"category": "electronics", "price": 200}),
+		NewMetadataNodeWithID(3, map[string]interface{}{"category": "books", "price": 15}),
+		NewMetadataNodeWithID(4, map[string]interface{}{"category": "books", "price": 25}),
+		NewMetadataNodeWithID(5, map[string]interface{}{"category": "clothing", "price": 50}),
+	}
+
+	for _, node := range nodes {
+		err := idx.Add(*node)
+		if err != nil {
+			t.Fatalf("Failed to add node %d: %v", node.ID(), err)
+		}
+	}
+
+	// Verify all documents are in allDocs
+	if idx.allDocs.GetCardinality() != 5 {
+		t.Errorf("Expected 5 documents in allDocs, got %d", idx.allDocs.GetCardinality())
+	}
+
+	// Verify categorical index
+	electronicsBitmap := idx.categorical["category:electronics"]
+	if electronicsBitmap == nil {
+		t.Fatal("electronics category bitmap not found")
+	}
+	if electronicsBitmap.GetCardinality() != 2 {
+		t.Errorf("Expected 2 electronics, got %d", electronicsBitmap.GetCardinality())
+	}
+
+	// Verify numeric index
+	priceBSI := idx.numeric["price"]
+	if priceBSI == nil {
+		t.Fatal("price numeric index not found")
+	}
+	existingDocs := priceBSI.GetExistenceBitmap()
+	if existingDocs.GetCardinality() != 5 {
+		t.Errorf("Expected 5 documents with price, got %d", existingDocs.GetCardinality())
+	}
+}
+
+// TestMetadataIndexRemove tests removing nodes from the index
+func TestMetadataIndexRemove(t *testing.T) {
+	idx := NewRoaringMetadataIndex()
+
+	// Add documents
+	nodes := []*MetadataNode{
+		NewMetadataNodeWithID(1, map[string]interface{}{"category": "electronics", "price": 100}),
+		NewMetadataNodeWithID(2, map[string]interface{}{"category": "electronics", "price": 200}),
+		NewMetadataNodeWithID(3, map[string]interface{}{"category": "books", "price": 15}),
+	}
+
+	for _, node := range nodes {
+		idx.Add(*node)
+	}
+
+	// Verify initial state
+	if idx.allDocs.GetCardinality() != 3 {
+		t.Fatalf("Expected 3 documents initially, got %d", idx.allDocs.GetCardinality())
+	}
+
+	// Remove document 1
+	err := idx.Remove(*nodes[0])
+	if err != nil {
+		t.Fatalf("Remove() error: %v", err)
+	}
+
+	// Verify document removed from allDocs
+	if idx.allDocs.Contains(1) {
+		t.Error("Document 1 still in allDocs after removal")
+	}
+
+	if idx.allDocs.GetCardinality() != 2 {
+		t.Errorf("Expected 2 documents after removal, got %d", idx.allDocs.GetCardinality())
+	}
+
+	// Verify removed from categorical index
+	electronicsBitmap := idx.categorical["category:electronics"]
+	if electronicsBitmap.Contains(1) {
+		t.Error("Document 1 still in electronics category after removal")
+	}
+
+	// Verify removed from numeric index
+	priceBSI := idx.numeric["price"]
+	existingDocs := priceBSI.GetExistenceBitmap()
+	if existingDocs.Contains(1) {
+		t.Error("Document 1 still in price index after removal")
+	}
+}
+
+// TestMetadataIndexRemoveNonexistent tests removing a non-existent node
+func TestMetadataIndexRemoveNonexistent(t *testing.T) {
+	idx := NewRoaringMetadataIndex()
+
+	node := NewMetadataNodeWithID(999, map[string]interface{}{"category": "test"})
+
+	// Should not error when removing non-existent document
+	err := idx.Remove(*node)
+	if err != nil {
+		t.Errorf("Remove() unexpected error for non-existent document: %v", err)
+	}
+}
+
+// TestMetadataIndexFlush tests the flush operation
+func TestMetadataIndexFlush(t *testing.T) {
+	idx := NewRoaringMetadataIndex()
+
+	// Add some data
+	node := NewMetadataNodeWithID(1, map[string]interface{}{"category": "test"})
+	idx.Add(*node)
+
+	// Flush should succeed (no-op)
+	err := idx.Flush()
+	if err != nil {
+		t.Errorf("Flush() unexpected error: %v", err)
+	}
+
+	// Data should still be present
+	if !idx.allDocs.Contains(1) {
+		t.Error("Data lost after Flush()")
+	}
+}
+
+// TestMetadataIndexCategoricalStorage tests categorical field storage
+func TestMetadataIndexCategoricalStorage(t *testing.T) {
+	idx := NewRoaringMetadataIndex()
+
+	// Add nodes with different categorical values
+	nodes := []*MetadataNode{
+		NewMetadataNodeWithID(1, map[string]interface{}{"color": "red"}),
+		NewMetadataNodeWithID(2, map[string]interface{}{"color": "blue"}),
+		NewMetadataNodeWithID(3, map[string]interface{}{"color": "red"}),
+		NewMetadataNodeWithID(4, map[string]interface{}{"color": "green"}),
+	}
+
+	for _, node := range nodes {
+		idx.Add(*node)
+	}
+
+	// Verify separate bitmaps for each value
+	redBitmap := idx.categorical["color:red"]
+	if redBitmap == nil || redBitmap.GetCardinality() != 2 {
+		t.Errorf("Expected 2 red items, got %v", redBitmap)
+	}
+
+	blueBitmap := idx.categorical["color:blue"]
+	if blueBitmap == nil || blueBitmap.GetCardinality() != 1 {
+		t.Errorf("Expected 1 blue item, got %v", blueBitmap)
+	}
+
+	greenBitmap := idx.categorical["color:green"]
+	if greenBitmap == nil || greenBitmap.GetCardinality() != 1 {
+		t.Errorf("Expected 1 green item, got %v", greenBitmap)
+	}
+}
+
+// TestMetadataIndexNumericStorage tests numeric field storage
+func TestMetadataIndexNumericStorage(t *testing.T) {
+	idx := NewRoaringMetadataIndex()
+
+	// Add nodes with numeric values
+	nodes := []*MetadataNode{
+		NewMetadataNodeWithID(1, map[string]interface{}{"score": 100}),
+		NewMetadataNodeWithID(2, map[string]interface{}{"score": 200}),
+		NewMetadataNodeWithID(3, map[string]interface{}{"score": 150}),
+	}
+
+	for _, node := range nodes {
+		idx.Add(*node)
+	}
+
+	// Verify BSI created
+	scoreBSI := idx.numeric["score"]
+	if scoreBSI == nil {
+		t.Fatal("score BSI not created")
+	}
+
+	// Verify all documents are in the existence bitmap
+	existingDocs := scoreBSI.GetExistenceBitmap()
+	if existingDocs.GetCardinality() != 3 {
+		t.Errorf("Expected 3 documents with score, got %d", existingDocs.GetCardinality())
+	}
+}
+
+// TestMetadataIndexBooleanStorage tests boolean field storage
+func TestMetadataIndexBooleanStorage(t *testing.T) {
+	idx := NewRoaringMetadataIndex()
+
+	// Add nodes with boolean values
+	nodes := []*MetadataNode{
+		NewMetadataNodeWithID(1, map[string]interface{}{"active": true}),
+		NewMetadataNodeWithID(2, map[string]interface{}{"active": false}),
+		NewMetadataNodeWithID(3, map[string]interface{}{"active": true}),
+	}
+
+	for _, node := range nodes {
+		idx.Add(*node)
+	}
+
+	// Booleans stored as categorical strings
+	trueBitmap := idx.categorical["active:true"]
+	if trueBitmap == nil || trueBitmap.GetCardinality() != 2 {
+		t.Errorf("Expected 2 active:true items, got %v", trueBitmap)
+	}
+
+	falseBitmap := idx.categorical["active:false"]
+	if falseBitmap == nil || falseBitmap.GetCardinality() != 1 {
+		t.Errorf("Expected 1 active:false item, got %v", falseBitmap)
+	}
+}
+
+// TestMetadataIndexFloatPrecision tests float to int conversion
+func TestMetadataIndexFloatPrecision(t *testing.T) {
+	idx := NewRoaringMetadataIndex()
+
+	// Add node with float value
+	node := NewMetadataNodeWithID(1, map[string]interface{}{"rating": 4.55})
+	idx.Add(*node)
+
+	// Float should be converted to int (455 = 4.55 * 100)
+	ratingBSI := idx.numeric["rating"]
+	if ratingBSI == nil {
+		t.Fatal("rating BSI not created")
+	}
+
+	// We can't directly check the stored value, but we can verify it exists
+	existingDocs := ratingBSI.GetExistenceBitmap()
+	if !existingDocs.Contains(1) {
+		t.Error("Document 1 not in rating index")
+	}
+}
+
+// TestMetadataIndexMixedFields tests nodes with mixed field types
+func TestMetadataIndexMixedFields(t *testing.T) {
+	idx := NewRoaringMetadataIndex()
+
+	// Add nodes with various field combinations
+	nodes := []*MetadataNode{
+		NewMetadataNodeWithID(1, map[string]interface{}{
+			"name":     "Product A",
+			"price":    100,
+			"rating":   4.5,
+			"in_stock": true,
+		}),
+		NewMetadataNodeWithID(2, map[string]interface{}{
+			"name":  "Product B",
+			"price": 200,
+		}),
+		NewMetadataNodeWithID(3, map[string]interface{}{
+			"name":     "Product C",
+			"in_stock": false,
+		}),
+	}
+
+	for _, node := range nodes {
+		err := idx.Add(*node)
+		if err != nil {
+			t.Fatalf("Failed to add node %d: %v", node.ID(), err)
+		}
+	}
+
+	// Verify categorical fields
+	if len(idx.categorical) == 0 {
+		t.Error("No categorical fields stored")
+	}
+
+	// Verify numeric fields
+	if len(idx.numeric) == 0 {
+		t.Error("No numeric fields stored")
+	}
+
+	// All documents should be tracked
+	if idx.allDocs.GetCardinality() != 3 {
+		t.Errorf("Expected 3 documents, got %d", idx.allDocs.GetCardinality())
+	}
+}
+
+// TestMetadataIndexConcurrentAdd tests concurrent additions
+func TestMetadataIndexConcurrentAdd(t *testing.T) {
+	idx := NewRoaringMetadataIndex()
+
+	const numGoroutines = 10
+	const nodesPerGoroutine = 100
+
+	errCh := make(chan error, numGoroutines)
+	doneCh := make(chan bool, numGoroutines)
+
+	for g := 0; g < numGoroutines; g++ {
+		go func(base uint32) {
+			for i := uint32(0); i < nodesPerGoroutine; i++ {
+				id := base*nodesPerGoroutine + i
+				node := NewMetadataNodeWithID(id, map[string]interface{}{
+					"category": fmt.Sprintf("cat%d", id%5),
+					"value":    int(id),
+				})
+				if err := idx.Add(*node); err != nil {
+					errCh <- err
+					return
+				}
+			}
+			doneCh <- true
+		}(uint32(g))
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < numGoroutines; i++ {
+		select {
+		case err := <-errCh:
+			t.Fatalf("Concurrent add error: %v", err)
+		case <-doneCh:
+			// Success
+		}
+	}
+
+	// Verify all documents were added
+	expected := uint64(numGoroutines * nodesPerGoroutine)
+	if idx.allDocs.GetCardinality() != expected {
+		t.Errorf("Expected %d documents, got %d", expected, idx.allDocs.GetCardinality())
+	}
+}
+
+// Helper function to extract and sort IDs from results
+func extractIDs(results []MetadataResult) []uint32 {
+	ids := make([]uint32, len(results))
+	for i, r := range results {
+		ids[i] = r.GetId()
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+// Benchmark tests
+func BenchmarkMetadataIndexAdd(b *testing.B) {
+	idx := NewRoaringMetadataIndex()
+
+	metadata := map[string]interface{}{
+		"category": "electronics",
+		"brand":    "Apple",
+		"price":    1000,
+		"rating":   4.5,
+		"in_stock": true,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		node := NewMetadataNodeWithID(uint32(i), metadata)
+		_ = idx.Add(*node)
+	}
+}
+
+func BenchmarkMetadataIndexAddWithManyFields(b *testing.B) {
+	idx := NewRoaringMetadataIndex()
+
+	metadata := map[string]interface{}{
+		"field1":  "value1",
+		"field2":  "value2",
+		"field3":  100,
+		"field4":  200,
+		"field5":  4.5,
+		"field6":  3.8,
+		"field7":  true,
+		"field8":  false,
+		"field9":  "value9",
+		"field10": 500,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		node := NewMetadataNodeWithID(uint32(i), metadata)
+		_ = idx.Add(*node)
+	}
+}
+
+func BenchmarkMetadataIndexRemove(b *testing.B) {
+	idx := NewRoaringMetadataIndex()
+
+	// Pre-populate index
+	for i := 0; i < b.N; i++ {
+		node := NewMetadataNodeWithID(uint32(i), map[string]interface{}{
+			"category": "test",
+			"value":    i,
+		})
+		idx.Add(*node)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		node := NewMetadataNodeWithID(uint32(i), nil)
+		idx.Remove(*node)
+	}
+}
+
+func BenchmarkMetadataIndexConcurrentAdd(b *testing.B) {
+	idx := NewRoaringMetadataIndex()
+
+	metadata := map[string]interface{}{
+		"category": "electronics",
+		"price":    1000,
+	}
+
+	b.RunParallel(func(pb *testing.PB) {
+		i := uint32(0)
+		for pb.Next() {
+			node := NewMetadataNodeWithID(i, metadata)
+			idx.Add(*node)
+			i++
+		}
+	})
+}
