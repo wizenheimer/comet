@@ -1,6 +1,8 @@
 package comet
 
 import (
+	"bytes"
+	"io"
 	"sync"
 	"testing"
 )
@@ -1061,5 +1063,557 @@ func TestIVFPQIndexSoftDeleteWithSearch(t *testing.T) {
 	// Verify physical removal
 	if totalSize := getTotalVectors(idx); totalSize != 2 {
 		t.Errorf("Expected 2 vectors in storage after flush, got %d", totalSize)
+	}
+}
+
+// TestIVFPQIndexWriteTo tests serialization of the IVFPQ index
+func TestIVFPQIndexWriteTo(t *testing.T) {
+	// Create and train index
+	dim := 32
+	nlist := 4
+	M, Nbits := 8, 8
+	idx, err := NewIVFPQIndex(dim, Euclidean, nlist, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewIVFPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := idx.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	// Add vectors
+	for i := 0; i < 10; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32((i+256)*dim + j)
+		}
+		node := NewVectorNode(vec)
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Serialize to buffer
+	var buf bytes.Buffer
+	n, err := idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	if n <= 0 {
+		t.Errorf("WriteTo() returned %d bytes, expected > 0", n)
+	}
+
+	// Verify buffer has data
+	if buf.Len() == 0 {
+		t.Error("WriteTo() wrote no data to buffer")
+	}
+
+	// Verify magic number
+	magic := buf.Bytes()[:4]
+	if string(magic) != "IVPQ" {
+		t.Errorf("Invalid magic number: got %s, want IVPQ", string(magic))
+	}
+}
+
+// TestIVFPQIndexReadFrom tests deserialization of the IVFPQ index
+func TestIVFPQIndexReadFrom(t *testing.T) {
+	// Create and train original index
+	dim := 32
+	nlist := 4
+	M, Nbits := 8, 8
+	original, err := NewIVFPQIndex(dim, Euclidean, nlist, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewIVFPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := original.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	// Add vectors
+	for i := 0; i < 10; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32((i+256)*dim + j)
+		}
+		node := NewVectorNode(vec)
+		if err := original.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Serialize
+	var buf bytes.Buffer
+	_, err = original.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// Create new index and deserialize
+	restored, err := NewIVFPQIndex(dim, Euclidean, nlist, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewIVFPQIndex() error: %v", err)
+	}
+
+	n, err := restored.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	if n <= 0 {
+		t.Errorf("ReadFrom() returned %d bytes, expected > 0", n)
+	}
+
+	// Verify restored index matches original
+	if restored.Dimensions() != original.Dimensions() {
+		t.Errorf("Dimensions mismatch: got %d, want %d", restored.Dimensions(), original.Dimensions())
+	}
+
+	if restored.DistanceKind() != original.DistanceKind() {
+		t.Errorf("DistanceKind mismatch: got %v, want %v", restored.DistanceKind(), original.DistanceKind())
+	}
+
+	if restored.nlist != original.nlist {
+		t.Errorf("nlist mismatch: got %d, want %d", restored.nlist, original.nlist)
+	}
+
+	if restored.M != original.M {
+		t.Errorf("M mismatch: got %d, want %d", restored.M, original.M)
+	}
+
+	if restored.Trained() != original.Trained() {
+		t.Errorf("Trained mismatch: got %v, want %v", restored.Trained(), original.Trained())
+	}
+
+	// Verify codebook dimensions
+	if len(restored.codebooks) != len(original.codebooks) {
+		t.Errorf("Codebooks count mismatch: got %d, want %d", len(restored.codebooks), len(original.codebooks))
+	}
+
+	// Verify inverted lists count
+	if len(restored.lists) != len(original.lists) {
+		t.Errorf("Lists count mismatch: got %d, want %d", len(restored.lists), len(original.lists))
+	}
+
+	// Verify total vectors
+	if getTotalVectors(restored) != getTotalVectors(original) {
+		t.Errorf("Total vectors mismatch: got %d, want %d", getTotalVectors(restored), getTotalVectors(original))
+	}
+}
+
+// TestIVFPQIndexSerializationRoundTrip tests that serialization and deserialization preserve data
+func TestIVFPQIndexSerializationRoundTrip(t *testing.T) {
+	// Create and train index
+	dim := 32
+	nlist := 4
+	M, Nbits := 8, 8
+	idx, err := NewIVFPQIndex(dim, Euclidean, nlist, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewIVFPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := idx.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	// Add vectors
+	testVectors := make([]VectorNode, 10)
+	for i := 0; i < 10; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32((i+256)*dim + j)
+		}
+		node := NewVectorNode(vec)
+		testVectors[i] = *node
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Perform a search before serialization
+	query := make([]float32, dim)
+	for j := 0; j < dim; j++ {
+		query[j] = float32(260*dim + j)
+	}
+	resultsBefore, err := idx.NewSearch().WithQuery(query).WithK(3).Execute()
+	if err != nil {
+		t.Fatalf("Search before serialization error: %v", err)
+	}
+
+	// Serialize
+	var buf bytes.Buffer
+	_, err = idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// Deserialize into new index
+	idx2, err := NewIVFPQIndex(dim, Euclidean, nlist, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewIVFPQIndex() error: %v", err)
+	}
+
+	_, err = idx2.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	// Perform same search after deserialization
+	resultsAfter, err := idx2.NewSearch().WithQuery(query).WithK(3).Execute()
+	if err != nil {
+		t.Fatalf("Search after deserialization error: %v", err)
+	}
+
+	// Results should have same count (IVFPQ is approximate, exact ordering may differ)
+	if len(resultsBefore) != len(resultsAfter) {
+		t.Errorf("Result count mismatch: before=%d, after=%d", len(resultsBefore), len(resultsAfter))
+	}
+
+	// Verify all result IDs are from our test vectors
+	// (IVFPQ is approximate, so we don't require exact ordering match)
+	for i, result := range resultsAfter {
+		found := false
+		for _, tv := range testVectors {
+			if result.Node.ID() == tv.ID() {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Result %d has unexpected ID %d", i, result.Node.ID())
+		}
+	}
+}
+
+// TestIVFPQIndexSerializationWithDeletions tests serialization with soft-deleted vectors
+func TestIVFPQIndexSerializationWithDeletions(t *testing.T) {
+	// Create and train index
+	dim := 32
+	nlist := 4
+	M, Nbits := 8, 8
+	idx, err := NewIVFPQIndex(dim, Euclidean, nlist, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewIVFPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := idx.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	// Add vectors
+	nodes := make([]*VectorNode, 4)
+	for i := 0; i < 4; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32((i+256)*dim + j)
+		}
+		node := NewVectorNode(vec)
+		nodes[i] = node
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Soft delete some vectors
+	idx.Remove(*nodes[1])
+	idx.Remove(*nodes[3])
+
+	// Verify soft deletes exist before serialization
+	initialTotal := getTotalVectors(idx)
+	if initialTotal != 4 {
+		t.Errorf("Expected 4 vectors before serialization (soft delete), got %d", initialTotal)
+	}
+
+	// Serialize (should call Flush automatically)
+	var buf bytes.Buffer
+	_, err = idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// After WriteTo (which calls Flush), deleted vectors should be removed
+	afterFlushTotal := getTotalVectors(idx)
+	if afterFlushTotal != 2 {
+		t.Errorf("Expected 2 vectors after WriteTo (auto-flush), got %d", afterFlushTotal)
+	}
+
+	// Deserialize
+	idx2, err := NewIVFPQIndex(dim, Euclidean, nlist, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewIVFPQIndex() error: %v", err)
+	}
+
+	_, err = idx2.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	// Restored index should only have non-deleted vectors
+	restoredTotal := getTotalVectors(idx2)
+	if restoredTotal != 2 {
+		t.Errorf("Expected 2 vectors in restored index, got %d", restoredTotal)
+	}
+}
+
+// TestIVFPQIndexReadFromInvalidData tests error handling for invalid serialized data
+func TestIVFPQIndexReadFromInvalidData(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func() *bytes.Buffer
+		wantErr string
+	}{
+		{
+			name: "invalid magic number",
+			setup: func() *bytes.Buffer {
+				buf := bytes.NewBuffer([]byte("XXXX"))
+				return buf
+			},
+			wantErr: "invalid magic number",
+		},
+		{
+			name: "unsupported version",
+			setup: func() *bytes.Buffer {
+				var buf bytes.Buffer
+				// Write valid magic
+				buf.Write([]byte("IVPQ"))
+				// Write invalid version
+				buf.Write([]byte{99, 0, 0, 0}) // version 99
+				return &buf
+			},
+			wantErr: "unsupported version",
+		},
+		{
+			name: "truncated data",
+			setup: func() *bytes.Buffer {
+				buf := bytes.NewBuffer([]byte("IV"))
+				return buf
+			},
+			wantErr: "failed to read magic number",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := tt.setup()
+
+			idx, err := NewIVFPQIndex(32, Euclidean, 4, 8, 8)
+			if err != nil {
+				t.Fatalf("NewIVFPQIndex() error: %v", err)
+			}
+
+			_, err = idx.ReadFrom(buf)
+			if err == nil {
+				t.Errorf("ReadFrom() expected error containing '%s', got nil", tt.wantErr)
+				return
+			}
+
+			// Check if error message contains expected substring
+			if tt.wantErr != "" {
+				errMsg := err.Error()
+				found := false
+				for i := 0; i <= len(errMsg)-len(tt.wantErr); i++ {
+					if errMsg[i:i+len(tt.wantErr)] == tt.wantErr {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("ReadFrom() error = %v, want error containing '%s'", err, tt.wantErr)
+				}
+			}
+		})
+	}
+}
+
+// TestIVFPQIndexSerializationUntrained tests serialization of untrained index
+func TestIVFPQIndexSerializationUntrained(t *testing.T) {
+	// Create untrained index
+	idx, err := NewIVFPQIndex(32, Euclidean, 4, 8, 8)
+	if err != nil {
+		t.Fatalf("NewIVFPQIndex() error: %v", err)
+	}
+
+	// Serialize untrained index
+	var buf bytes.Buffer
+	n, err := idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	if n <= 0 {
+		t.Errorf("WriteTo() returned %d bytes for untrained index, expected > 0", n)
+	}
+
+	// Deserialize
+	idx2, err := NewIVFPQIndex(32, Euclidean, 4, 8, 8)
+	if err != nil {
+		t.Fatalf("NewIVFPQIndex() error: %v", err)
+	}
+
+	_, err = idx2.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	// Verify restored index is also untrained
+	if idx2.Trained() {
+		t.Error("Expected restored index to be untrained")
+	}
+
+	// Verify codebooks are nil/empty
+	if len(idx2.codebooks) > 0 {
+		t.Error("Expected no codebooks in untrained restored index")
+	}
+
+	// Verify centroids are nil/empty
+	if len(idx2.centroids) > 0 {
+		t.Error("Expected no centroids in untrained restored index")
+	}
+}
+
+// TestIVFPQIndexWriteToFlushBehavior tests that WriteTo calls Flush
+func TestIVFPQIndexWriteToFlushBehavior(t *testing.T) {
+	// Create and train index
+	dim := 32
+	nlist := 4
+	M, Nbits := 8, 8
+	idx, err := NewIVFPQIndex(dim, Euclidean, nlist, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewIVFPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := idx.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	// Add vectors
+	nodes := make([]*VectorNode, 3)
+	for i := 0; i < 3; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32((i+256)*dim + j)
+		}
+		node := NewVectorNode(vec)
+		nodes[i] = node
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Soft delete one vector
+	idx.Remove(*nodes[1])
+
+	// Before WriteTo, should have 3 vectors (soft delete)
+	if totalVectors := getTotalVectors(idx); totalVectors != 3 {
+		t.Errorf("Expected 3 vectors before WriteTo, got %d", totalVectors)
+	}
+
+	// Call WriteTo (should flush)
+	var buf bytes.Buffer
+	_, err = idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// After WriteTo, should have 2 vectors (flush removes soft deletes)
+	if totalVectors := getTotalVectors(idx); totalVectors != 2 {
+		t.Errorf("Expected 2 vectors after WriteTo (auto-flush), got %d", totalVectors)
+	}
+
+	// Deleted bitmap should be empty
+	if idx.deletedNodes.GetCardinality() != 0 {
+		t.Errorf("Expected deletedNodes to be empty after WriteTo, got cardinality %d", idx.deletedNodes.GetCardinality())
+	}
+}
+
+// errorWriterIVFPQ is a writer that always returns an error
+type errorWriterIVFPQ struct{}
+
+func (e errorWriterIVFPQ) Write(p []byte) (n int, err error) {
+	return 0, io.ErrUnexpectedEOF
+}
+
+// TestIVFPQIndexWriteToError tests error handling during write operations
+func TestIVFPQIndexWriteToError(t *testing.T) {
+	// Create and train index
+	dim := 32
+	nlist := 4
+	M, Nbits := 8, 8
+	idx, err := NewIVFPQIndex(dim, Euclidean, nlist, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewIVFPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := idx.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	vec := make([]float32, dim)
+	for j := 0; j < dim; j++ {
+		vec[j] = float32(256*dim + j)
+	}
+	node := NewVectorNode(vec)
+	idx.Add(*node)
+
+	// Try to write to an error writer
+	var errWriter errorWriterIVFPQ
+	_, err = idx.WriteTo(errWriter)
+	if err == nil {
+		t.Error("WriteTo() expected error when writing to error writer, got nil")
 	}
 }

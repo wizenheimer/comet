@@ -1,6 +1,8 @@
 package comet
 
 import (
+	"bytes"
+	"io"
 	"sync"
 	"testing"
 )
@@ -1057,5 +1059,556 @@ func TestPQIndexSoftDeleteWithSearch(t *testing.T) {
 	}
 	if len(idx.vectorNodes) != 2 {
 		t.Errorf("Expected 2 vector nodes in storage after flush, got %d", len(idx.vectorNodes))
+	}
+}
+
+// TestPQIndexWriteTo tests serialization of the PQ index
+func TestPQIndexWriteTo(t *testing.T) {
+	// Create and train index
+	dim := 32
+	M, Nbits := 8, 8
+	idx, err := NewPQIndex(dim, Euclidean, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := idx.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	// Add vectors
+	for i := 0; i < 10; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32((i+256)*dim + j)
+		}
+		node := NewVectorNode(vec)
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Serialize to buffer
+	var buf bytes.Buffer
+	n, err := idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	if n <= 0 {
+		t.Errorf("WriteTo() returned %d bytes, expected > 0", n)
+	}
+
+	// Verify buffer has data
+	if buf.Len() == 0 {
+		t.Error("WriteTo() wrote no data to buffer")
+	}
+
+	// Verify magic number
+	magic := buf.Bytes()[:4]
+	if string(magic) != "PQIX" {
+		t.Errorf("Invalid magic number: got %s, want PQIX", string(magic))
+	}
+}
+
+// TestPQIndexReadFrom tests deserialization of the PQ index
+func TestPQIndexReadFrom(t *testing.T) {
+	// Create and train original index
+	dim := 32
+	M, Nbits := 8, 8
+	original, err := NewPQIndex(dim, Euclidean, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := original.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	// Add vectors
+	for i := 0; i < 10; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32((i+256)*dim + j)
+		}
+		node := NewVectorNode(vec)
+		if err := original.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Serialize
+	var buf bytes.Buffer
+	_, err = original.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// Create new index and deserialize
+	restored, err := NewPQIndex(dim, Euclidean, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	n, err := restored.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	if n <= 0 {
+		t.Errorf("ReadFrom() returned %d bytes, expected > 0", n)
+	}
+
+	// Verify restored index matches original
+	if restored.Dimensions() != original.Dimensions() {
+		t.Errorf("Dimensions mismatch: got %d, want %d", restored.Dimensions(), original.Dimensions())
+	}
+
+	if restored.DistanceKind() != original.DistanceKind() {
+		t.Errorf("DistanceKind mismatch: got %v, want %v", restored.DistanceKind(), original.DistanceKind())
+	}
+
+	if restored.M != original.M {
+		t.Errorf("M mismatch: got %d, want %d", restored.M, original.M)
+	}
+
+	if restored.Trained() != original.Trained() {
+		t.Errorf("Trained mismatch: got %v, want %v", restored.Trained(), original.Trained())
+	}
+
+	if len(restored.vectorNodes) != len(original.vectorNodes) {
+		t.Errorf("Vector count mismatch: got %d, want %d", len(restored.vectorNodes), len(original.vectorNodes))
+	}
+
+	if len(restored.codes) != len(original.codes) {
+		t.Errorf("Codes count mismatch: got %d, want %d", len(restored.codes), len(original.codes))
+	}
+
+	// Verify codebook dimensions
+	if len(restored.codebooks) != len(original.codebooks) {
+		t.Errorf("Codebooks count mismatch: got %d, want %d", len(restored.codebooks), len(original.codebooks))
+	}
+}
+
+// TestPQIndexSerializationRoundTrip tests that serialization and deserialization preserve data
+func TestPQIndexSerializationRoundTrip(t *testing.T) {
+	// Create and train index
+	dim := 32
+	M, Nbits := 8, 8
+	idx, err := NewPQIndex(dim, Euclidean, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := idx.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	// Add vectors
+	testVectors := make([]VectorNode, 10)
+	for i := 0; i < 10; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32((i+256)*dim + j)
+		}
+		node := NewVectorNode(vec)
+		testVectors[i] = *node
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Perform a search before serialization
+	query := make([]float32, dim)
+	for j := 0; j < dim; j++ {
+		query[j] = float32(260*dim + j)
+	}
+	resultsBefore, err := idx.NewSearch().WithQuery(query).WithK(3).Execute()
+	if err != nil {
+		t.Fatalf("Search before serialization error: %v", err)
+	}
+
+	// Serialize
+	var buf bytes.Buffer
+	_, err = idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// Deserialize into new index
+	idx2, err := NewPQIndex(dim, Euclidean, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	_, err = idx2.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	// Perform same search after deserialization
+	resultsAfter, err := idx2.NewSearch().WithQuery(query).WithK(3).Execute()
+	if err != nil {
+		t.Fatalf("Search after deserialization error: %v", err)
+	}
+
+	// Results should have same count (PQ is lossy, so exact ordering may differ slightly)
+	if len(resultsBefore) != len(resultsAfter) {
+		t.Errorf("Result count mismatch: before=%d, after=%d", len(resultsBefore), len(resultsAfter))
+	}
+
+	// Verify all result IDs are from our test vectors
+	// (PQ is approximate, so we don't require exact ordering match)
+	for i, result := range resultsAfter {
+		found := false
+		for _, tv := range testVectors {
+			if result.Node.ID() == tv.ID() {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Result %d has unexpected ID %d", i, result.Node.ID())
+		}
+	}
+}
+
+// TestPQIndexSerializationWithDeletions tests serialization with soft-deleted vectors
+func TestPQIndexSerializationWithDeletions(t *testing.T) {
+	// Create and train index
+	dim := 32
+	M, Nbits := 8, 8
+	idx, err := NewPQIndex(dim, Euclidean, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := idx.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	// Add vectors
+	nodes := make([]*VectorNode, 4)
+	for i := 0; i < 4; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32((i+256)*dim + j)
+		}
+		node := NewVectorNode(vec)
+		nodes[i] = node
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Soft delete some vectors
+	idx.Remove(*nodes[1])
+	idx.Remove(*nodes[3])
+
+	// Verify soft deletes exist before serialization
+	if len(idx.vectorNodes) != 4 {
+		t.Errorf("Expected 4 vectors before serialization (soft delete), got %d", len(idx.vectorNodes))
+	}
+
+	// Serialize (should call Flush automatically)
+	var buf bytes.Buffer
+	_, err = idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// After WriteTo (which calls Flush), deleted vectors should be removed
+	if len(idx.vectorNodes) != 2 {
+		t.Errorf("Expected 2 vectors after WriteTo (auto-flush), got %d", len(idx.vectorNodes))
+	}
+
+	// Deserialize
+	idx2, err := NewPQIndex(dim, Euclidean, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	_, err = idx2.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	// Restored index should only have non-deleted vectors
+	if len(idx2.vectorNodes) != 2 {
+		t.Errorf("Expected 2 vectors in restored index, got %d", len(idx2.vectorNodes))
+	}
+
+	// Verify the correct vectors remain
+	foundNode0 := false
+	foundNode2 := false
+	for _, v := range idx2.vectorNodes {
+		if v.ID() == nodes[0].ID() {
+			foundNode0 = true
+		}
+		if v.ID() == nodes[2].ID() {
+			foundNode2 = true
+		}
+	}
+
+	if !foundNode0 {
+		t.Error("Expected node 0 in restored index")
+	}
+	if !foundNode2 {
+		t.Error("Expected node 2 in restored index")
+	}
+}
+
+// TestPQIndexReadFromInvalidData tests error handling for invalid serialized data
+func TestPQIndexReadFromInvalidData(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func() *bytes.Buffer
+		wantErr string
+	}{
+		{
+			name: "invalid magic number",
+			setup: func() *bytes.Buffer {
+				buf := bytes.NewBuffer([]byte("XXXX"))
+				return buf
+			},
+			wantErr: "invalid magic number",
+		},
+		{
+			name: "unsupported version",
+			setup: func() *bytes.Buffer {
+				var buf bytes.Buffer
+				// Write valid magic
+				buf.Write([]byte("PQIX"))
+				// Write invalid version
+				buf.Write([]byte{99, 0, 0, 0}) // version 99
+				return &buf
+			},
+			wantErr: "unsupported version",
+		},
+		{
+			name: "truncated data",
+			setup: func() *bytes.Buffer {
+				buf := bytes.NewBuffer([]byte("PQ"))
+				return buf
+			},
+			wantErr: "failed to read magic number",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := tt.setup()
+
+			idx, err := NewPQIndex(32, Euclidean, 8, 8)
+			if err != nil {
+				t.Fatalf("NewPQIndex() error: %v", err)
+			}
+
+			_, err = idx.ReadFrom(buf)
+			if err == nil {
+				t.Errorf("ReadFrom() expected error containing '%s', got nil", tt.wantErr)
+				return
+			}
+
+			// Check if error message contains expected substring
+			if tt.wantErr != "" {
+				errMsg := err.Error()
+				found := false
+				for i := 0; i <= len(errMsg)-len(tt.wantErr); i++ {
+					if errMsg[i:i+len(tt.wantErr)] == tt.wantErr {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("ReadFrom() error = %v, want error containing '%s'", err, tt.wantErr)
+				}
+			}
+		})
+	}
+}
+
+// TestPQIndexSerializationUntrained tests serialization of untrained index
+func TestPQIndexSerializationUntrained(t *testing.T) {
+	// Create untrained index
+	idx, err := NewPQIndex(32, Euclidean, 8, 8)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	// Serialize untrained index
+	var buf bytes.Buffer
+	n, err := idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	if n <= 0 {
+		t.Errorf("WriteTo() returned %d bytes for untrained index, expected > 0", n)
+	}
+
+	// Deserialize
+	idx2, err := NewPQIndex(32, Euclidean, 8, 8)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	_, err = idx2.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	// Verify restored index is also untrained
+	if idx2.Trained() {
+		t.Error("Expected restored index to be untrained")
+	}
+
+	// Verify codebooks are nil/empty
+	if len(idx2.codebooks) > 0 {
+		t.Error("Expected no codebooks in untrained restored index")
+	}
+}
+
+// TestPQIndexWriteToFlushBehavior tests that WriteTo calls Flush
+func TestPQIndexWriteToFlushBehavior(t *testing.T) {
+	// Create and train index
+	dim := 32
+	M, Nbits := 8, 8
+	idx, err := NewPQIndex(dim, Euclidean, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := idx.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	// Add vectors
+	nodes := make([]*VectorNode, 3)
+	for i := 0; i < 3; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32((i+256)*dim + j)
+		}
+		node := NewVectorNode(vec)
+		nodes[i] = node
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Soft delete one vector
+	idx.Remove(*nodes[1])
+
+	// Before WriteTo, should have 3 vectors (soft delete)
+	if len(idx.vectorNodes) != 3 {
+		t.Errorf("Expected 3 vectors before WriteTo, got %d", len(idx.vectorNodes))
+	}
+
+	// Call WriteTo (should flush)
+	var buf bytes.Buffer
+	_, err = idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// After WriteTo, should have 2 vectors (flush removes soft deletes)
+	if len(idx.vectorNodes) != 2 {
+		t.Errorf("Expected 2 vectors after WriteTo (auto-flush), got %d", len(idx.vectorNodes))
+	}
+
+	// Deleted bitmap should be empty
+	if idx.deletedNodes.GetCardinality() != 0 {
+		t.Errorf("Expected deletedNodes to be empty after WriteTo, got cardinality %d", idx.deletedNodes.GetCardinality())
+	}
+}
+
+// errorWriter is a writer that always returns an error
+type errorWriterPQ struct{}
+
+func (e errorWriterPQ) Write(p []byte) (n int, err error) {
+	return 0, io.ErrUnexpectedEOF
+}
+
+// TestPQIndexWriteToError tests error handling during write operations
+func TestPQIndexWriteToError(t *testing.T) {
+	// Create and train index
+	dim := 32
+	M, Nbits := 8, 8
+	idx, err := NewPQIndex(dim, Euclidean, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	// Generate training vectors
+	trainingVectors := make([]VectorNode, 256)
+	for i := 0; i < 256; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	if err := idx.Train(trainingVectors); err != nil {
+		t.Fatalf("Train() error: %v", err)
+	}
+
+	vec := make([]float32, dim)
+	for j := 0; j < dim; j++ {
+		vec[j] = float32(256*dim + j)
+	}
+	node := NewVectorNode(vec)
+	idx.Add(*node)
+
+	// Try to write to an error writer
+	var errWriter errorWriterPQ
+	_, err = idx.WriteTo(errWriter)
+	if err == nil {
+		t.Error("WriteTo() expected error when writing to error writer, got nil")
 	}
 }

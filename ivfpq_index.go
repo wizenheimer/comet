@@ -24,7 +24,9 @@
 package comet
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 	"sync"
 
@@ -495,4 +497,440 @@ func (idx *IVFPQIndex) encodeResidual(residual []float32) []uint8 {
 	}
 
 	return code
+}
+
+// WriteTo serializes the IVFPQIndex to an io.Writer.
+//
+// IMPORTANT: This method calls Flush() before serialization to ensure all soft-deleted
+// vectors are permanently removed from the serialized data.
+//
+// The serialization format is:
+// 1. Magic number (4 bytes) - "IVPQ" identifier for validation
+// 2. Version (4 bytes) - Format version for backward compatibility
+// 3. Basic parameters:
+//   - Dimensionality (4 bytes)
+//   - Distance kind length (4 bytes) + distance kind string
+//   - nlist (4 bytes) - number of IVF clusters
+//   - M (4 bytes) - number of PQ subspaces
+//   - Nbits (4 bytes) - bits per PQ code
+//   - Ksub (4 bytes) - centroids per subspace
+//   - dsub (4 bytes) - subspace dimension
+//   - trained (1 byte) - whether index is trained
+//
+// 4. Centroids (only if trained):
+//   - For each of nlist centroids:
+//   - Centroid size (4 bytes)
+//   - Centroid data (dim * 4 bytes as float32)
+//
+// 5. Codebooks (only if trained):
+//   - For each of M subquantizers:
+//   - Codebook size (4 bytes)
+//   - Codebook data (Ksub * dsub * 4 bytes as float32)
+//
+// 6. Number of inverted lists (4 bytes)
+// 7. For each inverted list:
+//   - List size (4 bytes)
+//   - For each compressed vector:
+//   - Vector ID (4 bytes)
+//   - PQ code (M bytes)
+//
+// 8. Deleted nodes bitmap size (4 bytes) + roaring bitmap bytes
+//
+// Thread-safety: Acquires read lock during serialization
+//
+// Returns:
+//   - int64: Number of bytes written
+//   - error: Returns error if write fails or flush fails
+func (idx *IVFPQIndex) WriteTo(w io.Writer) (int64, error) {
+	// Flush before serializing to remove soft-deleted vectors
+	if err := idx.Flush(); err != nil {
+		return 0, fmt.Errorf("failed to flush before serialization: %w", err)
+	}
+
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	var bytesWritten int64
+
+	// Helper function to track writes
+	write := func(data interface{}) error {
+		err := binary.Write(w, binary.LittleEndian, data)
+		if err == nil {
+			switch data.(type) {
+			case uint32, int32, float32:
+				bytesWritten += 4
+			case uint8, int8, bool:
+				bytesWritten += 1
+			}
+		}
+		return err
+	}
+
+	// 1. Write magic number "IVPQ"
+	magic := [4]byte{'I', 'V', 'P', 'Q'}
+	if _, err := w.Write(magic[:]); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write magic number: %w", err)
+	}
+	bytesWritten += 4
+
+	// 2. Write version
+	version := uint32(1)
+	if err := write(version); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write version: %w", err)
+	}
+
+	// 3. Write basic parameters
+	if err := write(uint32(idx.dim)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write dimensionality: %w", err)
+	}
+
+	// Write distance kind
+	distanceKindBytes := []byte(idx.distanceKind)
+	if err := write(uint32(len(distanceKindBytes))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write distance kind length: %w", err)
+	}
+	if _, err := w.Write(distanceKindBytes); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write distance kind: %w", err)
+	}
+	bytesWritten += int64(len(distanceKindBytes))
+
+	if err := write(uint32(idx.nlist)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write nlist: %w", err)
+	}
+
+	if err := write(uint32(idx.M)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write M: %w", err)
+	}
+
+	if err := write(uint32(idx.Nbits)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write Nbits: %w", err)
+	}
+
+	if err := write(uint32(idx.Ksub)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write Ksub: %w", err)
+	}
+
+	if err := write(uint32(idx.dsub)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write dsub: %w", err)
+	}
+
+	// Write trained flag
+	trainedByte := uint8(0)
+	if idx.trained {
+		trainedByte = 1
+	}
+	if err := write(trainedByte); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write trained flag: %w", err)
+	}
+
+	// 4. Write centroids (only if trained)
+	if idx.trained {
+		for i, centroid := range idx.centroids {
+			// Write centroid size
+			if err := write(uint32(len(centroid))); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write centroid %d size: %w", i, err)
+			}
+
+			// Write centroid data
+			for _, val := range centroid {
+				if err := write(val); err != nil {
+					return bytesWritten, fmt.Errorf("failed to write centroid %d data: %w", i, err)
+				}
+			}
+		}
+
+		// 5. Write codebooks (only if trained)
+		for m := 0; m < idx.M; m++ {
+			// Write codebook size
+			codebookSize := uint32(len(idx.codebooks[m]))
+			if err := write(codebookSize); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write codebook %d size: %w", m, err)
+			}
+
+			// Write codebook data
+			for _, val := range idx.codebooks[m] {
+				if err := write(val); err != nil {
+					return bytesWritten, fmt.Errorf("failed to write codebook %d data: %w", m, err)
+				}
+			}
+		}
+	}
+
+	// 6. Write number of inverted lists
+	if err := write(uint32(len(idx.lists))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write list count: %w", err)
+	}
+
+	// 7. Write each inverted list
+	for listIdx, list := range idx.lists {
+		// Write list size
+		if err := write(uint32(len(list))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write list %d size: %w", listIdx, err)
+		}
+
+		// Write each compressed vector in the list
+		for i, cv := range list {
+			// Write vector ID
+			if err := write(cv.Node.ID()); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write list %d vector %d ID: %w", listIdx, i, err)
+			}
+
+			// Write PQ code
+			if _, err := w.Write(cv.Code); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write list %d vector %d code: %w", listIdx, i, err)
+			}
+			bytesWritten += int64(len(cv.Code))
+		}
+	}
+
+	// 8. Write deleted nodes bitmap
+	bitmapBytes, err := idx.deletedNodes.ToBytes()
+	if err != nil {
+		return bytesWritten, fmt.Errorf("failed to serialize deleted nodes bitmap: %w", err)
+	}
+	if err := write(uint32(len(bitmapBytes))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write bitmap size: %w", err)
+	}
+	if _, err := w.Write(bitmapBytes); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write bitmap data: %w", err)
+	}
+	bytesWritten += int64(len(bitmapBytes))
+
+	return bytesWritten, nil
+}
+
+// ReadFrom deserializes an IVFPQIndex from an io.Reader.
+//
+// This method reconstructs an IVFPQIndex from the serialized format created by WriteTo.
+// The deserialized index is fully functional and ready to use for searches.
+//
+// Thread-safety: Acquires write lock during deserialization
+//
+// Returns:
+//   - int64: Number of bytes read
+//   - error: Returns error if read fails, format is invalid, or data is corrupted
+//
+// Example:
+//
+//	// Save index
+//	file, _ := os.Create("index.bin")
+//	idx.WriteTo(file)
+//	file.Close()
+//
+//	// Load index
+//	file, _ := os.Open("index.bin")
+//	idx2, _ := NewIVFPQIndex(384, Cosine, 100, 8, 8)
+//	idx2.ReadFrom(file)
+//	file.Close()
+func (idx *IVFPQIndex) ReadFrom(r io.Reader) (int64, error) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	var bytesRead int64
+
+	// Helper function to track reads
+	read := func(data interface{}) error {
+		err := binary.Read(r, binary.LittleEndian, data)
+		if err == nil {
+			switch data.(type) {
+			case *uint32, *int32, *float32:
+				bytesRead += 4
+			case *uint8, *int8, *bool:
+				bytesRead += 1
+			}
+		}
+		return err
+	}
+
+	// 1. Read and validate magic number
+	magic := make([]byte, 4)
+	if _, err := io.ReadFull(r, magic); err != nil {
+		return bytesRead, fmt.Errorf("failed to read magic number: %w", err)
+	}
+	bytesRead += 4
+	if string(magic) != "IVPQ" {
+		return bytesRead, fmt.Errorf("invalid magic number: expected 'IVPQ', got '%s'", string(magic))
+	}
+
+	// 2. Read version
+	var version uint32
+	if err := read(&version); err != nil {
+		return bytesRead, fmt.Errorf("failed to read version: %w", err)
+	}
+	if version != 1 {
+		return bytesRead, fmt.Errorf("unsupported version: %d", version)
+	}
+
+	// 3. Read basic parameters
+	var dim uint32
+	if err := read(&dim); err != nil {
+		return bytesRead, fmt.Errorf("failed to read dimensionality: %w", err)
+	}
+
+	// Validate dimension matches
+	if int(dim) != idx.dim {
+		return bytesRead, fmt.Errorf("dimension mismatch: index has dim=%d, serialized data has dim=%d", idx.dim, dim)
+	}
+
+	// Read distance kind
+	var distanceKindLen uint32
+	if err := read(&distanceKindLen); err != nil {
+		return bytesRead, fmt.Errorf("failed to read distance kind length: %w", err)
+	}
+
+	distanceKindBytes := make([]byte, distanceKindLen)
+	if _, err := io.ReadFull(r, distanceKindBytes); err != nil {
+		return bytesRead, fmt.Errorf("failed to read distance kind: %w", err)
+	}
+	bytesRead += int64(distanceKindLen)
+
+	distanceKind := DistanceKind(distanceKindBytes)
+	if distanceKind != idx.distanceKind {
+		return bytesRead, fmt.Errorf("distance kind mismatch: index uses '%s', serialized data uses '%s'", idx.distanceKind, distanceKind)
+	}
+
+	// Read nlist, M, Nbits, Ksub, dsub
+	var nlist, M, Nbits, Ksub, dsub uint32
+	if err := read(&nlist); err != nil {
+		return bytesRead, fmt.Errorf("failed to read nlist: %w", err)
+	}
+	if err := read(&M); err != nil {
+		return bytesRead, fmt.Errorf("failed to read M: %w", err)
+	}
+	if err := read(&Nbits); err != nil {
+		return bytesRead, fmt.Errorf("failed to read Nbits: %w", err)
+	}
+	if err := read(&Ksub); err != nil {
+		return bytesRead, fmt.Errorf("failed to read Ksub: %w", err)
+	}
+	if err := read(&dsub); err != nil {
+		return bytesRead, fmt.Errorf("failed to read dsub: %w", err)
+	}
+
+	// Validate parameters match
+	if int(nlist) != idx.nlist {
+		return bytesRead, fmt.Errorf("parameter nlist mismatch: index has nlist=%d, serialized data has nlist=%d", idx.nlist, nlist)
+	}
+	if int(M) != idx.M {
+		return bytesRead, fmt.Errorf("parameter M mismatch: index has M=%d, serialized data has M=%d", idx.M, M)
+	}
+	if int(Nbits) != idx.Nbits {
+		return bytesRead, fmt.Errorf("parameter Nbits mismatch: index has Nbits=%d, serialized data has Nbits=%d", idx.Nbits, Nbits)
+	}
+	if int(Ksub) != idx.Ksub {
+		return bytesRead, fmt.Errorf("parameter Ksub mismatch: index has Ksub=%d, serialized data has Ksub=%d", idx.Ksub, Ksub)
+	}
+	if int(dsub) != idx.dsub {
+		return bytesRead, fmt.Errorf("parameter dsub mismatch: index has dsub=%d, serialized data has dsub=%d", idx.dsub, dsub)
+	}
+
+	// Read trained flag
+	var trainedByte uint8
+	if err := read(&trainedByte); err != nil {
+		return bytesRead, fmt.Errorf("failed to read trained flag: %w", err)
+	}
+	trained := trainedByte == 1
+
+	// 4. Read centroids (only if trained)
+	var centroids [][]float32
+	if trained {
+		centroids = make([][]float32, idx.nlist)
+		for i := 0; i < idx.nlist; i++ {
+			// Read centroid size
+			var centroidSize uint32
+			if err := read(&centroidSize); err != nil {
+				return bytesRead, fmt.Errorf("failed to read centroid %d size: %w", i, err)
+			}
+
+			// Read centroid data
+			centroids[i] = make([]float32, centroidSize)
+			for j := uint32(0); j < centroidSize; j++ {
+				if err := read(&centroids[i][j]); err != nil {
+					return bytesRead, fmt.Errorf("failed to read centroid %d data: %w", i, err)
+				}
+			}
+		}
+
+		// 5. Read codebooks (only if trained)
+		codebooks := make([][]float32, idx.M)
+		for m := 0; m < idx.M; m++ {
+			// Read codebook size
+			var codebookSize uint32
+			if err := read(&codebookSize); err != nil {
+				return bytesRead, fmt.Errorf("failed to read codebook %d size: %w", m, err)
+			}
+
+			// Read codebook data
+			codebooks[m] = make([]float32, codebookSize)
+			for j := uint32(0); j < codebookSize; j++ {
+				if err := read(&codebooks[m][j]); err != nil {
+					return bytesRead, fmt.Errorf("failed to read codebook %d data: %w", m, err)
+				}
+			}
+		}
+		idx.codebooks = codebooks
+	}
+
+	// 6. Read number of inverted lists
+	var listCount uint32
+	if err := read(&listCount); err != nil {
+		return bytesRead, fmt.Errorf("failed to read list count: %w", err)
+	}
+
+	// 7. Read inverted lists
+	lists := make([][]CompressedVector, listCount)
+	for listIdx := uint32(0); listIdx < listCount; listIdx++ {
+		// Read list size
+		var listSize uint32
+		if err := read(&listSize); err != nil {
+			return bytesRead, fmt.Errorf("failed to read list %d size: %w", listIdx, err)
+		}
+
+		lists[listIdx] = make([]CompressedVector, listSize)
+		for i := uint32(0); i < listSize; i++ {
+			// Read vector ID
+			var id uint32
+			if err := read(&id); err != nil {
+				return bytesRead, fmt.Errorf("failed to read list %d vector %d ID: %w", listIdx, i, err)
+			}
+
+			// Read PQ code
+			code := make([]uint8, idx.M)
+			if _, err := io.ReadFull(r, code); err != nil {
+				return bytesRead, fmt.Errorf("failed to read list %d vector %d code: %w", listIdx, i, err)
+			}
+			bytesRead += int64(idx.M)
+
+			// Create compressed vector (with empty original vector since IVFPQ doesn't store them)
+			lists[listIdx][i] = CompressedVector{
+				Node: *NewVectorNodeWithID(id, nil),
+				Code: code,
+			}
+		}
+	}
+
+	// 8. Read deleted nodes bitmap
+	var bitmapSize uint32
+	if err := read(&bitmapSize); err != nil {
+		return bytesRead, fmt.Errorf("failed to read bitmap size: %w", err)
+	}
+
+	bitmapBytes := make([]byte, bitmapSize)
+	if _, err := io.ReadFull(r, bitmapBytes); err != nil {
+		return bytesRead, fmt.Errorf("failed to read bitmap data: %w", err)
+	}
+	bytesRead += int64(bitmapSize)
+
+	deletedNodes := roaring.New()
+	if err := deletedNodes.UnmarshalBinary(bitmapBytes); err != nil {
+		return bytesRead, fmt.Errorf("failed to deserialize deleted nodes bitmap: %w", err)
+	}
+
+	// Update index state
+	idx.trained = trained
+	idx.centroids = centroids
+	idx.lists = lists
+	idx.deletedNodes = deletedNodes
+
+	return bytesRead, nil
 }

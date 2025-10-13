@@ -28,7 +28,9 @@
 package comet
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"sort"
 	"sync"
 )
@@ -610,4 +612,344 @@ func (s *hybridSearch) Execute() ([]HybridSearchResult, error) {
 	}
 
 	return results, nil
+}
+
+// WriteTo serializes the HybridSearchIndex to separate writers.
+//
+// IMPORTANT: This method calls Flush() before serialization to ensure all soft-deleted
+// documents are permanently removed from the serialized data.
+//
+// Parameters:
+//   - hybridWriter: Writer for the hybrid index metadata (docInfo map, flags)
+//   - vectorWriter: Writer for the vector index data (can be nil if no vector index)
+//   - textWriter: Writer for the text index data (can be nil if no text index)
+//   - metadataWriter: Writer for the metadata index data (can be nil if no metadata index)
+//
+// The hybrid metadata serialization format is:
+// 1. Magic number (4 bytes) - "HYBR" identifier for validation
+// 2. Version (4 bytes) - Format version for backward compatibility
+// 3. Index presence flags (3 bytes) - which indexes are present
+// 4. docInfo map:
+//   - Number of entries (4 bytes)
+//   - For each entry:
+//   - Document ID (4 bytes)
+//   - hasVector flag (1 byte)
+//   - hasText flag (1 byte)
+//   - hasMetadata flag (1 byte)
+//
+// Each underlying index is serialized to its respective writer using its own format.
+//
+// Thread-safety: Acquires read lock during serialization
+//
+// Returns:
+//   - error: Returns error if write fails or flush fails
+//
+// Example:
+//
+//	// Save to separate files
+//	hybridFile, _ := os.Create("hybrid.bin")
+//	vectorFile, _ := os.Create("vector.bin")
+//	textFile, _ := os.Create("text.bin")
+//	metadataFile, _ := os.Create("metadata.bin")
+//	err := idx.WriteTo(hybridFile, vectorFile, textFile, metadataFile)
+func (idx *hybridSearchIndex) WriteTo(hybridWriter, vectorWriter, textWriter, metadataWriter io.Writer) error {
+	// Flush before serializing to remove soft-deleted documents
+	if err := idx.Flush(); err != nil {
+		return fmt.Errorf("failed to flush before serialization: %w", err)
+	}
+
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	// Helper function for writing to hybrid writer
+	write := func(data interface{}) error {
+		return binary.Write(hybridWriter, binary.LittleEndian, data)
+	}
+
+	// 1. Write magic number "HYBR"
+	magic := [4]byte{'H', 'Y', 'B', 'R'}
+	if _, err := hybridWriter.Write(magic[:]); err != nil {
+		return fmt.Errorf("failed to write magic number: %w", err)
+	}
+
+	// 2. Write version
+	version := uint32(1)
+	if err := write(version); err != nil {
+		return fmt.Errorf("failed to write version: %w", err)
+	}
+
+	// 3. Write index presence flags
+	hasVector := uint8(0)
+	if idx.vectorIndex != nil {
+		hasVector = 1
+	}
+	hasText := uint8(0)
+	if idx.textIndex != nil {
+		hasText = 1
+	}
+	hasMetadata := uint8(0)
+	if idx.metadataIndex != nil {
+		hasMetadata = 1
+	}
+
+	if err := write(hasVector); err != nil {
+		return fmt.Errorf("failed to write hasVector flag: %w", err)
+	}
+	if err := write(hasText); err != nil {
+		return fmt.Errorf("failed to write hasText flag: %w", err)
+	}
+	if err := write(hasMetadata); err != nil {
+		return fmt.Errorf("failed to write hasMetadata flag: %w", err)
+	}
+
+	// 4. Write docInfo map
+	if err := write(uint32(len(idx.docInfo))); err != nil {
+		return fmt.Errorf("failed to write docInfo count: %w", err)
+	}
+
+	for id, info := range idx.docInfo {
+		if err := write(id); err != nil {
+			return fmt.Errorf("failed to write document ID: %w", err)
+		}
+
+		infoHasVector := uint8(0)
+		if info.hasVector {
+			infoHasVector = 1
+		}
+		infoHasText := uint8(0)
+		if info.hasText {
+			infoHasText = 1
+		}
+		infoHasMetadata := uint8(0)
+		if info.hasMetadata {
+			infoHasMetadata = 1
+		}
+
+		if err := write(infoHasVector); err != nil {
+			return fmt.Errorf("failed to write docInfo hasVector: %w", err)
+		}
+		if err := write(infoHasText); err != nil {
+			return fmt.Errorf("failed to write docInfo hasText: %w", err)
+		}
+		if err := write(infoHasMetadata); err != nil {
+			return fmt.Errorf("failed to write docInfo hasMetadata: %w", err)
+		}
+	}
+
+	// 5. Write vector index data (if present)
+	if idx.vectorIndex != nil && vectorWriter != nil {
+		if writerTo, ok := idx.vectorIndex.(io.WriterTo); ok {
+			if _, err := writerTo.WriteTo(vectorWriter); err != nil {
+				return fmt.Errorf("failed to write vector index: %w", err)
+			}
+		} else {
+			return fmt.Errorf("vector index does not implement io.WriterTo")
+		}
+	}
+
+	// 6. Write text index data (if present)
+	if idx.textIndex != nil && textWriter != nil {
+		if writerTo, ok := idx.textIndex.(io.WriterTo); ok {
+			if _, err := writerTo.WriteTo(textWriter); err != nil {
+				return fmt.Errorf("failed to write text index: %w", err)
+			}
+		} else {
+			return fmt.Errorf("text index does not implement io.WriterTo")
+		}
+	}
+
+	// 7. Write metadata index data (if present)
+	if idx.metadataIndex != nil && metadataWriter != nil {
+		if writerTo, ok := idx.metadataIndex.(io.WriterTo); ok {
+			if _, err := writerTo.WriteTo(metadataWriter); err != nil {
+				return fmt.Errorf("failed to write metadata index: %w", err)
+			}
+		} else {
+			return fmt.Errorf("metadata index does not implement io.WriterTo")
+		}
+	}
+
+	return nil
+}
+
+// ReadFrom deserializes a HybridSearchIndex from a single combined reader.
+//
+// This method implements the standard io.ReaderFrom interface. The reader should contain
+// the serialized data in the following order:
+//  1. Hybrid index metadata (docInfo map, flags)
+//  2. Vector index data (if present)
+//  3. Text index data (if present)
+//  4. Metadata index data (if present)
+//
+// If you have separate readers for each component, use io.MultiReader to combine them:
+//
+//	combinedReader := io.MultiReader(hybridReader, vectorReader, textReader, metadataReader)
+//	idx.ReadFrom(combinedReader)
+//
+// IMPORTANT: The underlying indexes (vectorIndex, textIndex, metadataIndex) must be
+// created and configured before calling ReadFrom. This method will populate them with
+// the deserialized data.
+//
+// Thread-safety: Acquires write lock during deserialization
+//
+// Returns:
+//   - int64: Number of bytes read
+//   - error: Returns error if read fails, format is invalid, or data is corrupted
+//
+// Example:
+//
+//	// Save hybrid index to separate files
+//	hybridFile, _ := os.Create("hybrid.bin")
+//	vectorFile, _ := os.Create("vector.bin")
+//	textFile, _ := os.Create("text.bin")
+//	metadataFile, _ := os.Create("metadata.bin")
+//	idx.WriteTo(hybridFile, vectorFile, textFile, metadataFile)
+//
+//	// Load hybrid index - create underlying indexes first
+//	vecIdx, _ := NewFlatIndex(384, Cosine)
+//	txtIdx := NewBM25SearchIndex()
+//	metaIdx := NewRoaringMetadataIndex()
+//	idx2 := NewHybridSearchIndex(vecIdx, txtIdx, metaIdx)
+//	hybridFile, _ = os.Open("hybrid.bin")
+//	vectorFile, _ = os.Open("vector.bin")
+//	textFile, _ = os.Open("text.bin")
+//	metadataFile, _ = os.Open("metadata.bin")
+//	combined := io.MultiReader(hybridFile, vectorFile, textFile, metadataFile)
+//	idx2.(*hybridSearchIndex).ReadFrom(combined)
+func (idx *hybridSearchIndex) ReadFrom(r io.Reader) (int64, error) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	var bytesRead int64
+
+	// Helper function for reading and tracking bytes
+	read := func(data interface{}) error {
+		err := binary.Read(r, binary.LittleEndian, data)
+		if err == nil {
+			switch data.(type) {
+			case *uint32, *int32:
+				bytesRead += 4
+			case *uint8, *int8, *bool:
+				bytesRead += 1
+			}
+		}
+		return err
+	}
+
+	// 1. Read and validate magic number
+	magic := make([]byte, 4)
+	if _, err := io.ReadFull(r, magic); err != nil {
+		return bytesRead, fmt.Errorf("failed to read magic number: %w", err)
+	}
+	bytesRead += 4
+	if string(magic) != "HYBR" {
+		return bytesRead, fmt.Errorf("invalid magic number: expected 'HYBR', got '%s'", string(magic))
+	}
+
+	// 2. Read version
+	var version uint32
+	if err := read(&version); err != nil {
+		return bytesRead, fmt.Errorf("failed to read version: %w", err)
+	}
+	if version != 1 {
+		return bytesRead, fmt.Errorf("unsupported version: %d", version)
+	}
+
+	// 3. Read index presence flags
+	var hasVector, hasText, hasMetadata uint8
+	if err := read(&hasVector); err != nil {
+		return bytesRead, fmt.Errorf("failed to read hasVector flag: %w", err)
+	}
+	if err := read(&hasText); err != nil {
+		return bytesRead, fmt.Errorf("failed to read hasText flag: %w", err)
+	}
+	if err := read(&hasMetadata); err != nil {
+		return bytesRead, fmt.Errorf("failed to read hasMetadata flag: %w", err)
+	}
+
+	// Validate that the underlying indexes match what was serialized
+	if (hasVector == 1) != (idx.vectorIndex != nil) {
+		return bytesRead, fmt.Errorf("vector index presence mismatch: serialized=%v, current=%v", hasVector == 1, idx.vectorIndex != nil)
+	}
+	if (hasText == 1) != (idx.textIndex != nil) {
+		return bytesRead, fmt.Errorf("text index presence mismatch: serialized=%v, current=%v", hasText == 1, idx.textIndex != nil)
+	}
+	if (hasMetadata == 1) != (idx.metadataIndex != nil) {
+		return bytesRead, fmt.Errorf("metadata index presence mismatch: serialized=%v, current=%v", hasMetadata == 1, idx.metadataIndex != nil)
+	}
+
+	// 4. Read docInfo map
+	var docInfoCount uint32
+	if err := read(&docInfoCount); err != nil {
+		return bytesRead, fmt.Errorf("failed to read docInfo count: %w", err)
+	}
+
+	docInfo := make(map[uint32]*documentInfo, docInfoCount)
+	for i := uint32(0); i < docInfoCount; i++ {
+		var id uint32
+		if err := read(&id); err != nil {
+			return bytesRead, fmt.Errorf("failed to read document ID: %w", err)
+		}
+
+		var infoHasVector, infoHasText, infoHasMetadata uint8
+		if err := read(&infoHasVector); err != nil {
+			return bytesRead, fmt.Errorf("failed to read docInfo hasVector: %w", err)
+		}
+		if err := read(&infoHasText); err != nil {
+			return bytesRead, fmt.Errorf("failed to read docInfo hasText: %w", err)
+		}
+		if err := read(&infoHasMetadata); err != nil {
+			return bytesRead, fmt.Errorf("failed to read docInfo hasMetadata: %w", err)
+		}
+
+		docInfo[id] = &documentInfo{
+			hasVector:   infoHasVector == 1,
+			hasText:     infoHasText == 1,
+			hasMetadata: infoHasMetadata == 1,
+		}
+	}
+
+	// 5. Read vector index data (if present)
+	if idx.vectorIndex != nil {
+		if readerFrom, ok := idx.vectorIndex.(io.ReaderFrom); ok {
+			n, err := readerFrom.ReadFrom(r)
+			bytesRead += n
+			if err != nil {
+				return bytesRead, fmt.Errorf("failed to read vector index: %w", err)
+			}
+		} else {
+			return bytesRead, fmt.Errorf("vector index does not implement io.ReaderFrom")
+		}
+	}
+
+	// 6. Read text index data (if present)
+	if idx.textIndex != nil {
+		if readerFrom, ok := idx.textIndex.(io.ReaderFrom); ok {
+			n, err := readerFrom.ReadFrom(r)
+			bytesRead += n
+			if err != nil {
+				return bytesRead, fmt.Errorf("failed to read text index: %w", err)
+			}
+		} else {
+			return bytesRead, fmt.Errorf("text index does not implement io.ReaderFrom")
+		}
+	}
+
+	// 7. Read metadata index data (if present)
+	if idx.metadataIndex != nil {
+		if readerFrom, ok := idx.metadataIndex.(io.ReaderFrom); ok {
+			n, err := readerFrom.ReadFrom(r)
+			bytesRead += n
+			if err != nil {
+				return bytesRead, fmt.Errorf("failed to read metadata index: %w", err)
+			}
+		} else {
+			return bytesRead, fmt.Errorf("metadata index does not implement io.ReaderFrom")
+		}
+	}
+
+	// Update the docInfo map
+	idx.docInfo = docInfo
+
+	return bytesRead, nil
 }

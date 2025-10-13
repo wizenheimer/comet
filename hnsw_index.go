@@ -26,7 +26,9 @@ package comet
 
 import (
 	"container/heap"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
 	"sort"
@@ -689,4 +691,406 @@ func (idx *HNSWIndex) pruneConnections(nodeID uint32, layer, M int) {
 	for i := 0; i < numNeighbors; i++ {
 		node.Edges[layer][i] = candList[i].id
 	}
+}
+
+// WriteTo serializes the HNSWIndex to an io.Writer.
+//
+// IMPORTANT: This method calls Flush() before serialization to ensure all soft-deleted
+// nodes are permanently removed from the serialized data.
+//
+// The serialization format is:
+// 1. Magic number (4 bytes) - "HNSW" identifier for validation
+// 2. Version (4 bytes) - Format version for backward compatibility
+// 3. Basic parameters:
+//   - Dimensionality (4 bytes)
+//   - Distance kind length (4 bytes) + distance kind string
+//   - M (4 bytes)
+//   - efConstruction (4 bytes)
+//   - efSearch (4 bytes)
+//   - levelMult (8 bytes as float64)
+//
+// 4. Graph structure:
+//   - maxLevel (4 bytes)
+//   - entryPoint (4 bytes)
+//
+// 5. Number of nodes (4 bytes)
+// 6. For each node:
+//   - Node ID (4 bytes)
+//   - Level (4 bytes)
+//   - Vector dimension (4 bytes)
+//   - Vector data (dim * 4 bytes as float32)
+//   - Number of edge layers (4 bytes)
+//   - For each layer:
+//   - Number of edges (4 bytes)
+//   - Edge IDs (n * 4 bytes)
+//
+// 7. Deleted nodes bitmap size (4 bytes) + roaring bitmap bytes
+//
+// Thread-safety: Acquires read lock during serialization
+//
+// Returns:
+//   - int64: Number of bytes written
+//   - error: Returns error if write fails or flush fails
+func (idx *HNSWIndex) WriteTo(w io.Writer) (int64, error) {
+	// Flush before serializing to remove soft-deleted nodes
+	if err := idx.Flush(); err != nil {
+		return 0, fmt.Errorf("failed to flush before serialization: %w", err)
+	}
+
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	var bytesWritten int64
+
+	// Helper function to track writes
+	write := func(data interface{}) error {
+		err := binary.Write(w, binary.LittleEndian, data)
+		if err == nil {
+			switch data.(type) {
+			case uint32, int32:
+				bytesWritten += 4
+			case uint64, int64, float64:
+				bytesWritten += 8
+			case float32:
+				bytesWritten += 4
+			}
+		}
+		return err
+	}
+
+	// 1. Write magic number "HNSW"
+	magic := [4]byte{'H', 'N', 'S', 'W'}
+	if _, err := w.Write(magic[:]); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write magic number: %w", err)
+	}
+	bytesWritten += 4
+
+	// 2. Write version
+	version := uint32(1)
+	if err := write(version); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write version: %w", err)
+	}
+
+	// 3. Write basic parameters
+	if err := write(uint32(idx.dim)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write dimensionality: %w", err)
+	}
+
+	// Write distance kind
+	distanceKindBytes := []byte(idx.distanceKind)
+	if err := write(uint32(len(distanceKindBytes))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write distance kind length: %w", err)
+	}
+	if _, err := w.Write(distanceKindBytes); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write distance kind: %w", err)
+	}
+	bytesWritten += int64(len(distanceKindBytes))
+
+	if err := write(uint32(idx.M)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write M: %w", err)
+	}
+
+	if err := write(uint32(idx.efConstruction)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write efConstruction: %w", err)
+	}
+
+	if err := write(uint32(idx.efSearch)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write efSearch: %w", err)
+	}
+
+	if err := write(idx.levelMult); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write levelMult: %w", err)
+	}
+
+	// 4. Write graph structure
+	if err := write(int32(idx.maxLevel)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write maxLevel: %w", err)
+	}
+
+	if err := write(idx.entryPoint); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write entryPoint: %w", err)
+	}
+
+	// 5. Write number of nodes
+	if err := write(uint32(len(idx.nodes))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write node count: %w", err)
+	}
+
+	// 6. Write each node
+	for nodeID, node := range idx.nodes {
+		// Write node ID
+		if err := write(nodeID); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write node ID: %w", err)
+		}
+
+		// Write level
+		if err := write(int32(node.Level)); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write node level: %w", err)
+		}
+
+		// Write vector
+		vec := node.Vector()
+		if err := write(uint32(len(vec))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write vector dimension: %w", err)
+		}
+		for _, val := range vec {
+			if err := write(val); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write vector data: %w", err)
+			}
+		}
+
+		// Write edges
+		if err := write(uint32(len(node.Edges))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write edge layer count: %w", err)
+		}
+		for layer, edges := range node.Edges {
+			if err := write(uint32(len(edges))); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write edge count for layer %d: %w", layer, err)
+			}
+			for _, edgeID := range edges {
+				if err := write(edgeID); err != nil {
+					return bytesWritten, fmt.Errorf("failed to write edge ID: %w", err)
+				}
+			}
+		}
+	}
+
+	// 7. Write deleted nodes bitmap
+	bitmapBytes, err := idx.deletedNodes.ToBytes()
+	if err != nil {
+		return bytesWritten, fmt.Errorf("failed to serialize deleted nodes bitmap: %w", err)
+	}
+	if err := write(uint32(len(bitmapBytes))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write bitmap size: %w", err)
+	}
+	if _, err := w.Write(bitmapBytes); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write bitmap data: %w", err)
+	}
+	bytesWritten += int64(len(bitmapBytes))
+
+	return bytesWritten, nil
+}
+
+// ReadFrom deserializes an HNSWIndex from an io.Reader.
+//
+// This method reconstructs an HNSWIndex from the serialized format created by WriteTo.
+// The deserialized index is fully functional and ready to use for searches.
+//
+// Thread-safety: Acquires write lock during deserialization
+//
+// Returns:
+//   - int64: Number of bytes read
+//   - error: Returns error if read fails, format is invalid, or data is corrupted
+//
+// Example:
+//
+//	// Save index
+//	file, _ := os.Create("hnsw_index.bin")
+//	idx.WriteTo(file)
+//	file.Close()
+//
+//	// Load index
+//	file, _ := os.Open("hnsw_index.bin")
+//	m, efC, efS := DefaultHNSWConfig()
+//	idx2, _ := NewHNSWIndex(384, Cosine, m, efC, efS)
+//	idx2.ReadFrom(file)
+//	file.Close()
+func (idx *HNSWIndex) ReadFrom(r io.Reader) (int64, error) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	var bytesRead int64
+
+	// Helper function to track reads
+	read := func(data interface{}) error {
+		err := binary.Read(r, binary.LittleEndian, data)
+		if err == nil {
+			switch data.(type) {
+			case *uint32, *int32:
+				bytesRead += 4
+			case *uint64, *int64, *float64:
+				bytesRead += 8
+			case *float32:
+				bytesRead += 4
+			}
+		}
+		return err
+	}
+
+	// 1. Read and validate magic number
+	magic := make([]byte, 4)
+	if _, err := io.ReadFull(r, magic); err != nil {
+		return bytesRead, fmt.Errorf("failed to read magic number: %w", err)
+	}
+	bytesRead += 4
+	if string(magic) != "HNSW" {
+		return bytesRead, fmt.Errorf("invalid magic number: expected 'HNSW', got '%s'", string(magic))
+	}
+
+	// 2. Read version
+	var version uint32
+	if err := read(&version); err != nil {
+		return bytesRead, fmt.Errorf("failed to read version: %w", err)
+	}
+	if version != 1 {
+		return bytesRead, fmt.Errorf("unsupported version: %d", version)
+	}
+
+	// 3. Read basic parameters
+	var dim uint32
+	if err := read(&dim); err != nil {
+		return bytesRead, fmt.Errorf("failed to read dimensionality: %w", err)
+	}
+
+	// Validate dimension matches
+	if int(dim) != idx.dim {
+		return bytesRead, fmt.Errorf("dimension mismatch: index has dim=%d, serialized data has dim=%d", idx.dim, dim)
+	}
+
+	// Read distance kind
+	var distanceKindLen uint32
+	if err := read(&distanceKindLen); err != nil {
+		return bytesRead, fmt.Errorf("failed to read distance kind length: %w", err)
+	}
+
+	distanceKindBytes := make([]byte, distanceKindLen)
+	if _, err := io.ReadFull(r, distanceKindBytes); err != nil {
+		return bytesRead, fmt.Errorf("failed to read distance kind: %w", err)
+	}
+	bytesRead += int64(distanceKindLen)
+
+	distanceKind := DistanceKind(distanceKindBytes)
+	if distanceKind != idx.distanceKind {
+		return bytesRead, fmt.Errorf("distance kind mismatch: index uses '%s', serialized data uses '%s'", idx.distanceKind, distanceKind)
+	}
+
+	// Read M, efConstruction, efSearch
+	var M, efConstruction, efSearch uint32
+	if err := read(&M); err != nil {
+		return bytesRead, fmt.Errorf("failed to read M: %w", err)
+	}
+	if err := read(&efConstruction); err != nil {
+		return bytesRead, fmt.Errorf("failed to read efConstruction: %w", err)
+	}
+	if err := read(&efSearch); err != nil {
+		return bytesRead, fmt.Errorf("failed to read efSearch: %w", err)
+	}
+
+	// Validate parameters match
+	if int(M) != idx.M {
+		return bytesRead, fmt.Errorf("m parameter mismatch: index has m=%d, serialized data has m=%d", idx.M, M)
+	}
+	if int(efConstruction) != idx.efConstruction {
+		return bytesRead, fmt.Errorf("efConstruction mismatch: index has %d, serialized data has %d", idx.efConstruction, efConstruction)
+	}
+	if int(efSearch) != idx.efSearch {
+		return bytesRead, fmt.Errorf("efSearch mismatch: index has %d, serialized data has %d", idx.efSearch, efSearch)
+	}
+
+	// Read levelMult
+	var levelMult float64
+	if err := read(&levelMult); err != nil {
+		return bytesRead, fmt.Errorf("failed to read levelMult: %w", err)
+	}
+
+	// 4. Read graph structure
+	var maxLevel int32
+	if err := read(&maxLevel); err != nil {
+		return bytesRead, fmt.Errorf("failed to read maxLevel: %w", err)
+	}
+
+	var entryPoint uint32
+	if err := read(&entryPoint); err != nil {
+		return bytesRead, fmt.Errorf("failed to read entryPoint: %w", err)
+	}
+
+	// 5. Read number of nodes
+	var nodeCount uint32
+	if err := read(&nodeCount); err != nil {
+		return bytesRead, fmt.Errorf("failed to read node count: %w", err)
+	}
+
+	// 6. Read each node
+	nodes := make(map[uint32]*hnswNode, nodeCount)
+	for i := uint32(0); i < nodeCount; i++ {
+		// Read node ID
+		var nodeID uint32
+		if err := read(&nodeID); err != nil {
+			return bytesRead, fmt.Errorf("failed to read node ID: %w", err)
+		}
+
+		// Read level
+		var level int32
+		if err := read(&level); err != nil {
+			return bytesRead, fmt.Errorf("failed to read node level: %w", err)
+		}
+
+		// Read vector
+		var vecDim uint32
+		if err := read(&vecDim); err != nil {
+			return bytesRead, fmt.Errorf("failed to read vector dimension: %w", err)
+		}
+
+		vec := make([]float32, vecDim)
+		for j := uint32(0); j < vecDim; j++ {
+			if err := read(&vec[j]); err != nil {
+				return bytesRead, fmt.Errorf("failed to read vector data: %w", err)
+			}
+		}
+
+		// Read edges
+		var edgeLayerCount uint32
+		if err := read(&edgeLayerCount); err != nil {
+			return bytesRead, fmt.Errorf("failed to read edge layer count: %w", err)
+		}
+
+		edges := make([][]uint32, edgeLayerCount)
+		for layer := uint32(0); layer < edgeLayerCount; layer++ {
+			var edgeCount uint32
+			if err := read(&edgeCount); err != nil {
+				return bytesRead, fmt.Errorf("failed to read edge count for layer %d: %w", layer, err)
+			}
+
+			edges[layer] = make([]uint32, edgeCount)
+			for e := uint32(0); e < edgeCount; e++ {
+				if err := read(&edges[layer][e]); err != nil {
+					return bytesRead, fmt.Errorf("failed to read edge ID: %w", err)
+				}
+			}
+		}
+
+		// Create node
+		node := &hnswNode{
+			VectorNode: *NewVectorNodeWithID(nodeID, vec),
+			Level:      int(level),
+			Edges:      edges,
+		}
+		nodes[nodeID] = node
+	}
+
+	// 7. Read deleted nodes bitmap
+	var bitmapSize uint32
+	if err := read(&bitmapSize); err != nil {
+		return bytesRead, fmt.Errorf("failed to read bitmap size: %w", err)
+	}
+
+	bitmapBytes := make([]byte, bitmapSize)
+	if _, err := io.ReadFull(r, bitmapBytes); err != nil {
+		return bytesRead, fmt.Errorf("failed to read bitmap data: %w", err)
+	}
+	bytesRead += int64(bitmapSize)
+
+	deletedNodes := roaring.New()
+	if err := deletedNodes.UnmarshalBinary(bitmapBytes); err != nil {
+		return bytesRead, fmt.Errorf("failed to deserialize deleted nodes bitmap: %w", err)
+	}
+
+	// Update index state
+	idx.levelMult = levelMult
+	idx.maxLevel = int(maxLevel)
+	idx.entryPoint = entryPoint
+	idx.nodes = nodes
+	idx.deletedNodes = deletedNodes
+
+	return bytesRead, nil
 }

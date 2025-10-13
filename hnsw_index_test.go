@@ -1,6 +1,8 @@
 package comet
 
 import (
+	"bytes"
+	"io"
 	"sync"
 	"testing"
 )
@@ -1118,5 +1120,478 @@ func TestNewHnswNode(t *testing.T) {
 		if node.Edges[i] == nil {
 			t.Errorf("Edge layer %d not initialized", i)
 		}
+	}
+}
+
+// ============================================================================
+// SERIALIZATION TESTS
+// ============================================================================
+
+// TestHNSWIndexWriteTo tests serialization of the HNSW index
+func TestHNSWIndexWriteTo(t *testing.T) {
+	dim := 32
+	m, efConstruction, efSearch := 8, 100, 100
+	idx, err := NewHNSWIndex(dim, Euclidean, m, efConstruction, efSearch)
+	if err != nil {
+		t.Fatalf("NewHNSWIndex() error: %v", err)
+	}
+
+	// Add vectors
+	for i := 0; i < 10; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		node := NewVectorNode(vec)
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Serialize to buffer
+	var buf bytes.Buffer
+	n, err := idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	if n <= 0 {
+		t.Errorf("WriteTo() returned %d bytes, expected > 0", n)
+	}
+
+	// Verify buffer has data
+	if buf.Len() == 0 {
+		t.Error("WriteTo() wrote no data to buffer")
+	}
+
+	// Verify magic number
+	magic := buf.Bytes()[:4]
+	if string(magic) != "HNSW" {
+		t.Errorf("Invalid magic number: got %s, want HNSW", string(magic))
+	}
+}
+
+// TestHNSWIndexReadFrom tests deserialization of the HNSW index
+func TestHNSWIndexReadFrom(t *testing.T) {
+	dim := 32
+	m, efConstruction, efSearch := 8, 100, 100
+	original, err := NewHNSWIndex(dim, Euclidean, m, efConstruction, efSearch)
+	if err != nil {
+		t.Fatalf("NewHNSWIndex() error: %v", err)
+	}
+
+	// Add vectors
+	for i := 0; i < 10; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		node := NewVectorNode(vec)
+		if err := original.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Serialize
+	var buf bytes.Buffer
+	_, err = original.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// Create new index and deserialize
+	restored, err := NewHNSWIndex(dim, Euclidean, m, efConstruction, efSearch)
+	if err != nil {
+		t.Fatalf("NewHNSWIndex() error: %v", err)
+	}
+
+	n, err := restored.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	if n <= 0 {
+		t.Errorf("ReadFrom() returned %d bytes, expected > 0", n)
+	}
+
+	// Verify restored index matches original
+	if restored.Dimensions() != original.Dimensions() {
+		t.Errorf("Dimensions mismatch: got %d, want %d", restored.Dimensions(), original.Dimensions())
+	}
+
+	if restored.DistanceKind() != original.DistanceKind() {
+		t.Errorf("DistanceKind mismatch: got %v, want %v", restored.DistanceKind(), original.DistanceKind())
+	}
+
+	if restored.M != original.M {
+		t.Errorf("M mismatch: got %d, want %d", restored.M, original.M)
+	}
+
+	if restored.maxLevel != original.maxLevel {
+		t.Errorf("maxLevel mismatch: got %d, want %d", restored.maxLevel, original.maxLevel)
+	}
+
+	if restored.entryPoint != original.entryPoint {
+		t.Errorf("entryPoint mismatch: got %d, want %d", restored.entryPoint, original.entryPoint)
+	}
+
+	// Verify node count
+	if len(restored.nodes) != len(original.nodes) {
+		t.Errorf("Node count mismatch: got %d, want %d", len(restored.nodes), len(original.nodes))
+	}
+}
+
+// TestHNSWIndexSerializationRoundTrip tests that serialization and deserialization preserve data
+func TestHNSWIndexSerializationRoundTrip(t *testing.T) {
+	dim := 32
+	m, efConstruction, efSearch := 8, 100, 100
+	idx, err := NewHNSWIndex(dim, Euclidean, m, efConstruction, efSearch)
+	if err != nil {
+		t.Fatalf("NewHNSWIndex() error: %v", err)
+	}
+
+	// Add vectors
+	for i := 0; i < 20; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		node := NewVectorNode(vec)
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Perform a search before serialization
+	query := make([]float32, dim)
+	for j := 0; j < dim; j++ {
+		query[j] = float32(10*dim + j)
+	}
+	resultsBefore, err := idx.NewSearch().WithQuery(query).WithK(5).Execute()
+	if err != nil {
+		t.Fatalf("Search before serialization error: %v", err)
+	}
+
+	// Serialize
+	var buf bytes.Buffer
+	_, err = idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// Deserialize into new index
+	idx2, err := NewHNSWIndex(dim, Euclidean, m, efConstruction, efSearch)
+	if err != nil {
+		t.Fatalf("NewHNSWIndex() error: %v", err)
+	}
+
+	_, err = idx2.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	// Perform same search after deserialization
+	resultsAfter, err := idx2.NewSearch().WithQuery(query).WithK(5).Execute()
+	if err != nil {
+		t.Fatalf("Search after deserialization error: %v", err)
+	}
+
+	// Results should match in count
+	if len(resultsBefore) != len(resultsAfter) {
+		t.Errorf("Result count mismatch: before=%d, after=%d", len(resultsBefore), len(resultsAfter))
+	}
+
+	// HNSW is approximate, so exact ordering may vary for vectors with similar distances
+	// Verify that the same set of IDs is returned
+	idsBefore := make(map[uint32]bool)
+	for _, r := range resultsBefore {
+		idsBefore[r.Node.ID()] = true
+	}
+
+	idsAfter := make(map[uint32]bool)
+	for _, r := range resultsAfter {
+		idsAfter[r.Node.ID()] = true
+	}
+
+	// Check that all IDs from before are in after
+	for id := range idsBefore {
+		if !idsAfter[id] {
+			t.Errorf("ID %d present before serialization but missing after", id)
+		}
+	}
+
+	// Check that all IDs from after are in before
+	for id := range idsAfter {
+		if !idsBefore[id] {
+			t.Errorf("ID %d present after serialization but missing before", id)
+		}
+	}
+}
+
+// TestHNSWIndexSerializationWithDeletions tests serialization with soft-deleted nodes
+func TestHNSWIndexSerializationWithDeletions(t *testing.T) {
+	dim := 32
+	m, efConstruction, efSearch := 8, 100, 100
+	idx, err := NewHNSWIndex(dim, Euclidean, m, efConstruction, efSearch)
+	if err != nil {
+		t.Fatalf("NewHNSWIndex() error: %v", err)
+	}
+
+	// Add vectors
+	nodes := make([]*VectorNode, 6)
+	for i := 0; i < 6; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		node := NewVectorNode(vec)
+		nodes[i] = node
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Soft delete some nodes
+	idx.Remove(*nodes[1])
+	idx.Remove(*nodes[3])
+	idx.Remove(*nodes[5])
+
+	// Verify soft deletes exist before serialization
+	initialNodeCount := len(idx.nodes)
+	if initialNodeCount != 6 {
+		t.Errorf("Expected 6 nodes before serialization (soft delete), got %d", initialNodeCount)
+	}
+
+	// Serialize (should call Flush automatically)
+	var buf bytes.Buffer
+	_, err = idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// After WriteTo (which calls Flush), deleted nodes should be removed
+	afterFlushCount := len(idx.nodes)
+	if afterFlushCount != 3 {
+		t.Errorf("Expected 3 nodes after WriteTo (auto-flush), got %d", afterFlushCount)
+	}
+
+	// Deserialize
+	idx2, err := NewHNSWIndex(dim, Euclidean, m, efConstruction, efSearch)
+	if err != nil {
+		t.Fatalf("NewHNSWIndex() error: %v", err)
+	}
+
+	_, err = idx2.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	// Restored index should only have non-deleted nodes
+	restoredCount := len(idx2.nodes)
+	if restoredCount != 3 {
+		t.Errorf("Expected 3 nodes in restored index, got %d", restoredCount)
+	}
+
+	// Verify only nodes 0, 2, 4 exist
+	for _, expectedID := range []uint32{nodes[0].ID(), nodes[2].ID(), nodes[4].ID()} {
+		if _, exists := idx2.nodes[expectedID]; !exists {
+			t.Errorf("Expected node %d to exist in restored index", expectedID)
+		}
+	}
+	for _, deletedID := range []uint32{nodes[1].ID(), nodes[3].ID(), nodes[5].ID()} {
+		if _, exists := idx2.nodes[deletedID]; exists {
+			t.Errorf("Expected node %d to NOT exist in restored index (deleted)", deletedID)
+		}
+	}
+}
+
+// TestHNSWIndexReadFromInvalidData tests error handling for invalid serialized data
+func TestHNSWIndexReadFromInvalidData(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func() *bytes.Buffer
+		wantErr string
+	}{
+		{
+			name: "invalid magic number",
+			setup: func() *bytes.Buffer {
+				buf := bytes.NewBuffer([]byte("XXXX"))
+				return buf
+			},
+			wantErr: "invalid magic number",
+		},
+		{
+			name: "unsupported version",
+			setup: func() *bytes.Buffer {
+				var buf bytes.Buffer
+				// Write valid magic
+				buf.Write([]byte("HNSW"))
+				// Write invalid version
+				buf.Write([]byte{99, 0, 0, 0}) // version 99
+				return &buf
+			},
+			wantErr: "unsupported version",
+		},
+		{
+			name: "truncated data",
+			setup: func() *bytes.Buffer {
+				buf := bytes.NewBuffer([]byte("HN"))
+				return buf
+			},
+			wantErr: "failed to read magic number",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := tt.setup()
+
+			m, efC, efS := DefaultHNSWConfig()
+			idx, err := NewHNSWIndex(32, Euclidean, m, efC, efS)
+			if err != nil {
+				t.Fatalf("NewHNSWIndex() error: %v", err)
+			}
+
+			_, err = idx.ReadFrom(buf)
+			if err == nil {
+				t.Errorf("ReadFrom() expected error containing '%s', got nil", tt.wantErr)
+				return
+			}
+
+			// Check if error message contains expected substring
+			if tt.wantErr != "" {
+				errMsg := err.Error()
+				found := false
+				for i := 0; i <= len(errMsg)-len(tt.wantErr); i++ {
+					if errMsg[i:i+len(tt.wantErr)] == tt.wantErr {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("ReadFrom() error = %v, want error containing '%s'", err, tt.wantErr)
+				}
+			}
+		})
+	}
+}
+
+// TestHNSWIndexSerializationEmpty tests serialization of an empty index
+func TestHNSWIndexSerializationEmpty(t *testing.T) {
+	m, efC, efS := DefaultHNSWConfig()
+	idx, err := NewHNSWIndex(32, Euclidean, m, efC, efS)
+	if err != nil {
+		t.Fatalf("NewHNSWIndex() error: %v", err)
+	}
+
+	// Serialize empty index
+	var buf bytes.Buffer
+	n, err := idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	if n <= 0 {
+		t.Errorf("WriteTo() returned %d bytes for empty index, expected > 0", n)
+	}
+
+	// Deserialize
+	idx2, err := NewHNSWIndex(32, Euclidean, m, efC, efS)
+	if err != nil {
+		t.Fatalf("NewHNSWIndex() error: %v", err)
+	}
+
+	_, err = idx2.ReadFrom(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrom() error: %v", err)
+	}
+
+	// Verify restored index is also empty
+	if len(idx2.nodes) != 0 {
+		t.Errorf("Expected 0 nodes in restored empty index, got %d", len(idx2.nodes))
+	}
+
+	if idx2.maxLevel != -1 {
+		t.Errorf("Expected maxLevel -1 in empty index, got %d", idx2.maxLevel)
+	}
+}
+
+// TestHNSWIndexWriteToFlushBehavior tests that WriteTo calls Flush
+func TestHNSWIndexWriteToFlushBehavior(t *testing.T) {
+	dim := 32
+	m, efConstruction, efSearch := 8, 100, 100
+	idx, err := NewHNSWIndex(dim, Euclidean, m, efConstruction, efSearch)
+	if err != nil {
+		t.Fatalf("NewHNSWIndex() error: %v", err)
+	}
+
+	// Add vectors
+	nodes := make([]*VectorNode, 4)
+	for i := 0; i < 4; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i*dim + j)
+		}
+		node := NewVectorNode(vec)
+		nodes[i] = node
+		if err := idx.Add(*node); err != nil {
+			t.Fatalf("Add() error: %v", err)
+		}
+	}
+
+	// Soft delete one node
+	idx.Remove(*nodes[2])
+
+	// Before WriteTo, should have 4 nodes (soft delete)
+	if len(idx.nodes) != 4 {
+		t.Errorf("Expected 4 nodes before WriteTo, got %d", len(idx.nodes))
+	}
+
+	// Call WriteTo (should flush)
+	var buf bytes.Buffer
+	_, err = idx.WriteTo(&buf)
+	if err != nil {
+		t.Fatalf("WriteTo() error: %v", err)
+	}
+
+	// After WriteTo, should have 3 nodes (flush removes soft deletes)
+	if len(idx.nodes) != 3 {
+		t.Errorf("Expected 3 nodes after WriteTo (auto-flush), got %d", len(idx.nodes))
+	}
+
+	// Deleted bitmap should be empty
+	if idx.deletedNodes.GetCardinality() != 0 {
+		t.Errorf("Expected deletedNodes to be empty after WriteTo, got cardinality %d", idx.deletedNodes.GetCardinality())
+	}
+}
+
+// errorWriterHNSW is a writer that always returns an error
+type errorWriterHNSW struct{}
+
+func (e errorWriterHNSW) Write(p []byte) (n int, err error) {
+	return 0, io.ErrUnexpectedEOF
+}
+
+// TestHNSWIndexWriteToError tests error handling during write operations
+func TestHNSWIndexWriteToError(t *testing.T) {
+	dim := 32
+	m, efC, efS := DefaultHNSWConfig()
+	idx, err := NewHNSWIndex(dim, Euclidean, m, efC, efS)
+	if err != nil {
+		t.Fatalf("NewHNSWIndex() error: %v", err)
+	}
+
+	vec := make([]float32, dim)
+	for j := 0; j < dim; j++ {
+		vec[j] = float32(j)
+	}
+	node := NewVectorNode(vec)
+	idx.Add(*node)
+
+	// Try to write to an error writer
+	var errWriter errorWriterHNSW
+	_, err = idx.WriteTo(errWriter)
+	if err == nil {
+		t.Error("WriteTo() expected error when writing to error writer, got nil")
 	}
 }
