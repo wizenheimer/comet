@@ -55,7 +55,9 @@
 package comet
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
@@ -548,4 +550,327 @@ func AnyOf(field string, values ...interface{}) Filter {
 // NoneOf creates a NOT IN filter (alias for NotIn)
 func NoneOf(field string, values ...interface{}) Filter {
 	return NotIn(field, values...)
+}
+
+// WriteTo serializes the RoaringMetadataIndex to an io.Writer.
+//
+// IMPORTANT: This method calls Flush() before serialization (though Flush is a no-op
+// for metadata index since it's memory-based).
+//
+// The serialization format is:
+// 1. Magic number (4 bytes) - "MTIX" identifier for validation
+// 2. Version (4 bytes) - Format version for backward compatibility
+// 3. All docs bitmap size (4 bytes) + bitmap bytes
+// 4. Number of categorical entries (4 bytes)
+// 5. For each categorical entry:
+//   - Key length (4 bytes) + key string
+//   - Bitmap size (4 bytes) + bitmap bytes
+//
+// 6. Number of numeric entries (4 bytes)
+// 7. For each numeric entry:
+//   - Field name length (4 bytes) + field name string
+//   - BSI size (4 bytes) + BSI bytes
+//
+// Thread-safety: Acquires read lock during serialization
+//
+// Returns:
+//   - int64: Number of bytes written
+//   - error: Returns error if write fails or flush fails
+func (idx *RoaringMetadataIndex) WriteTo(w io.Writer) (int64, error) {
+	// Flush before serializing (no-op for metadata index)
+	if err := idx.Flush(); err != nil {
+		return 0, fmt.Errorf("failed to flush before serialization: %w", err)
+	}
+
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	var bytesWritten int64
+
+	// Helper function to track writes
+	write := func(data interface{}) error {
+		err := binary.Write(w, binary.LittleEndian, data)
+		if err == nil {
+			switch data.(type) {
+			case uint32, int32, float32:
+				bytesWritten += 4
+			case uint8, int8, bool:
+				bytesWritten += 1
+			}
+		}
+		return err
+	}
+
+	// 1. Write magic number "MTIX"
+	magic := [4]byte{'M', 'T', 'I', 'X'}
+	if _, err := w.Write(magic[:]); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write magic number: %w", err)
+	}
+	bytesWritten += 4
+
+	// 2. Write version
+	version := uint32(1)
+	if err := write(version); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write version: %w", err)
+	}
+
+	// 3. Write allDocs bitmap
+	allDocsBytes, err := idx.allDocs.ToBytes()
+	if err != nil {
+		return bytesWritten, fmt.Errorf("failed to serialize allDocs bitmap: %w", err)
+	}
+	if err := write(uint32(len(allDocsBytes))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write allDocs size: %w", err)
+	}
+	if _, err := w.Write(allDocsBytes); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write allDocs data: %w", err)
+	}
+	bytesWritten += int64(len(allDocsBytes))
+
+	// 4. Write categorical entries
+	if err := write(uint32(len(idx.categorical))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write categorical count: %w", err)
+	}
+
+	for key, bitmap := range idx.categorical {
+		// Write key
+		keyBytes := []byte(key)
+		if err := write(uint32(len(keyBytes))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write key length: %w", err)
+		}
+		if _, err := w.Write(keyBytes); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write key: %w", err)
+		}
+		bytesWritten += int64(len(keyBytes))
+
+		// Write bitmap
+		bitmapBytes, err := bitmap.ToBytes()
+		if err != nil {
+			return bytesWritten, fmt.Errorf("failed to serialize bitmap for key %s: %w", key, err)
+		}
+		if err := write(uint32(len(bitmapBytes))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write bitmap size for key %s: %w", key, err)
+		}
+		if _, err := w.Write(bitmapBytes); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write bitmap data for key %s: %w", key, err)
+		}
+		bytesWritten += int64(len(bitmapBytes))
+	}
+
+	// 6. Write numeric entries
+	if err := write(uint32(len(idx.numeric))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write numeric count: %w", err)
+	}
+
+	for field, bsiIndex := range idx.numeric {
+		// Write field name
+		fieldBytes := []byte(field)
+		if err := write(uint32(len(fieldBytes))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write field name length: %w", err)
+		}
+		if _, err := w.Write(fieldBytes); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write field name: %w", err)
+		}
+		bytesWritten += int64(len(fieldBytes))
+
+		// Write BSI
+		bsiBytes, err := bsiIndex.MarshalBinary()
+		if err != nil {
+			return bytesWritten, fmt.Errorf("failed to serialize BSI for field %s: %w", field, err)
+		}
+		// Write number of byte slices
+		if err := write(uint32(len(bsiBytes))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write BSI slice count for field %s: %w", field, err)
+		}
+		// Write each byte slice
+		for j, slice := range bsiBytes {
+			if err := write(uint32(len(slice))); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write BSI slice %d size for field %s: %w", j, field, err)
+			}
+			if _, err := w.Write(slice); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write BSI slice %d data for field %s: %w", j, field, err)
+			}
+			bytesWritten += int64(len(slice))
+		}
+	}
+
+	return bytesWritten, nil
+}
+
+// ReadFrom deserializes a RoaringMetadataIndex from an io.Reader.
+//
+// This method reconstructs a RoaringMetadataIndex from the serialized format created by WriteTo.
+// The deserialized index is fully functional and ready to use for searches.
+//
+// Thread-safety: Acquires write lock during deserialization
+//
+// Returns:
+//   - int64: Number of bytes read
+//   - error: Returns error if read fails, format is invalid, or data is corrupted
+//
+// Example:
+//
+//	// Save index
+//	file, _ := os.Create("index.bin")
+//	idx.WriteTo(file)
+//	file.Close()
+//
+//	// Load index
+//	file, _ := os.Open("index.bin")
+//	idx2 := NewRoaringMetadataIndex()
+//	idx2.ReadFrom(file)
+//	file.Close()
+func (idx *RoaringMetadataIndex) ReadFrom(r io.Reader) (int64, error) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	var bytesRead int64
+
+	// Helper function to track reads
+	read := func(data interface{}) error {
+		err := binary.Read(r, binary.LittleEndian, data)
+		if err == nil {
+			switch data.(type) {
+			case *uint32, *int32, *float32:
+				bytesRead += 4
+			case *uint8, *int8, *bool:
+				bytesRead += 1
+			}
+		}
+		return err
+	}
+
+	// 1. Read and validate magic number
+	magic := make([]byte, 4)
+	if _, err := io.ReadFull(r, magic); err != nil {
+		return bytesRead, fmt.Errorf("failed to read magic number: %w", err)
+	}
+	bytesRead += 4
+	if string(magic) != "MTIX" {
+		return bytesRead, fmt.Errorf("invalid magic number: expected 'MTIX', got '%s'", string(magic))
+	}
+
+	// 2. Read version
+	var version uint32
+	if err := read(&version); err != nil {
+		return bytesRead, fmt.Errorf("failed to read version: %w", err)
+	}
+	if version != 1 {
+		return bytesRead, fmt.Errorf("unsupported version: %d", version)
+	}
+
+	// 3. Read allDocs bitmap
+	var allDocsSize uint32
+	if err := read(&allDocsSize); err != nil {
+		return bytesRead, fmt.Errorf("failed to read allDocs size: %w", err)
+	}
+
+	allDocsBytes := make([]byte, allDocsSize)
+	if _, err := io.ReadFull(r, allDocsBytes); err != nil {
+		return bytesRead, fmt.Errorf("failed to read allDocs data: %w", err)
+	}
+	bytesRead += int64(allDocsSize)
+
+	allDocs := roaring.New()
+	if err := allDocs.UnmarshalBinary(allDocsBytes); err != nil {
+		return bytesRead, fmt.Errorf("failed to deserialize allDocs bitmap: %w", err)
+	}
+
+	// 4. Read categorical entries
+	var categoricalCount uint32
+	if err := read(&categoricalCount); err != nil {
+		return bytesRead, fmt.Errorf("failed to read categorical count: %w", err)
+	}
+
+	categorical := make(map[string]*roaring.Bitmap, categoricalCount)
+	for i := uint32(0); i < categoricalCount; i++ {
+		// Read key
+		var keyLen uint32
+		if err := read(&keyLen); err != nil {
+			return bytesRead, fmt.Errorf("failed to read key length for entry %d: %w", i, err)
+		}
+
+		keyBytes := make([]byte, keyLen)
+		if _, err := io.ReadFull(r, keyBytes); err != nil {
+			return bytesRead, fmt.Errorf("failed to read key for entry %d: %w", i, err)
+		}
+		bytesRead += int64(keyLen)
+		key := string(keyBytes)
+
+		// Read bitmap
+		var bitmapSize uint32
+		if err := read(&bitmapSize); err != nil {
+			return bytesRead, fmt.Errorf("failed to read bitmap size for key %s: %w", key, err)
+		}
+
+		bitmapBytes := make([]byte, bitmapSize)
+		if _, err := io.ReadFull(r, bitmapBytes); err != nil {
+			return bytesRead, fmt.Errorf("failed to read bitmap data for key %s: %w", key, err)
+		}
+		bytesRead += int64(bitmapSize)
+
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(bitmapBytes); err != nil {
+			return bytesRead, fmt.Errorf("failed to deserialize bitmap for key %s: %w", key, err)
+		}
+
+		categorical[key] = bitmap
+	}
+
+	// 6. Read numeric entries
+	var numericCount uint32
+	if err := read(&numericCount); err != nil {
+		return bytesRead, fmt.Errorf("failed to read numeric count: %w", err)
+	}
+
+	numeric := make(map[string]*bsi.BSI, numericCount)
+	for i := uint32(0); i < numericCount; i++ {
+		// Read field name
+		var fieldLen uint32
+		if err := read(&fieldLen); err != nil {
+			return bytesRead, fmt.Errorf("failed to read field name length for entry %d: %w", i, err)
+		}
+
+		fieldBytes := make([]byte, fieldLen)
+		if _, err := io.ReadFull(r, fieldBytes); err != nil {
+			return bytesRead, fmt.Errorf("failed to read field name for entry %d: %w", i, err)
+		}
+		bytesRead += int64(fieldLen)
+		field := string(fieldBytes)
+
+		// Read BSI
+		var bsiSliceCount uint32
+		if err := read(&bsiSliceCount); err != nil {
+			return bytesRead, fmt.Errorf("failed to read BSI slice count for field %s: %w", field, err)
+		}
+
+		bsiBytes := make([][]byte, bsiSliceCount)
+		for j := uint32(0); j < bsiSliceCount; j++ {
+			var sliceSize uint32
+			if err := read(&sliceSize); err != nil {
+				return bytesRead, fmt.Errorf("failed to read BSI slice %d size for field %s: %w", j, field, err)
+			}
+
+			slice := make([]byte, sliceSize)
+			if _, err := io.ReadFull(r, slice); err != nil {
+				return bytesRead, fmt.Errorf("failed to read BSI slice %d data for field %s: %w", j, field, err)
+			}
+			bytesRead += int64(sliceSize)
+			bsiBytes[j] = slice
+		}
+
+		bsiIndex := bsi.NewBSI(bsi.Min64BitSigned, bsi.Max64BitSigned)
+		if err := bsiIndex.UnmarshalBinary(bsiBytes); err != nil {
+			return bytesRead, fmt.Errorf("failed to deserialize BSI for field %s: %w", field, err)
+		}
+
+		numeric[field] = bsiIndex
+	}
+
+	// Update index state
+	idx.allDocs = allDocs
+	idx.categorical = categorical
+	idx.numeric = numeric
+
+	return bytesRead, nil
 }

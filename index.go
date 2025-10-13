@@ -1,5 +1,7 @@
 package comet
 
+import "io"
+
 // VectorIndexKind represents the type of indexing strategy used for vector search.
 // Different index types offer different tradeoffs between speed, accuracy, and memory usage.
 type VectorIndexKind string
@@ -54,6 +56,10 @@ type VectorIndex interface {
 
 	// Trained returns true if the index has been trained
 	Trained() bool
+
+	// Serialization support
+	io.WriterTo
+	io.ReaderFrom
 }
 
 type TextIndex interface {
@@ -68,6 +74,10 @@ type TextIndex interface {
 
 	// Flush the text index
 	Flush() error
+
+	// Serialization support
+	io.WriterTo
+	io.ReaderFrom
 }
 
 // MetadataIndex is the interface for filtering documents based on metadata
@@ -83,6 +93,10 @@ type MetadataIndex interface {
 
 	// Flush the metadata index
 	Flush() error
+
+	// Serialization support
+	io.WriterTo
+	io.ReaderFrom
 }
 
 // HybridSearchIndex provides a unified interface for multi-modal search
@@ -114,4 +128,12 @@ type HybridSearchIndex interface {
 
 	// MetadataIndex returns the underlying metadata index
 	MetadataIndex() MetadataIndex
+
+	// Serialization support
+	// WriteTo writes each component to a separate writer for maximum flexibility
+	// Usage: WriteTo(hybridWriter, vectorWriter, textWriter, metadataWriter)
+	WriteTo(hybridWriter, vectorWriter, textWriter, metadataWriter io.Writer) error
+
+	// ReadFrom reads from a combined reader (use io.MultiReader to combine separate readers)
+	io.ReaderFrom
 }

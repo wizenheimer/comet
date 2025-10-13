@@ -56,6 +56,9 @@ package comet
 
 import (
 	"container/heap"
+	"encoding/binary"
+	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -415,4 +418,440 @@ func (h *resultHeap) Pop() interface{} {
 	x := old[n-1]
 	*h = old[0 : n-1]
 	return x
+}
+
+// WriteTo serializes the BM25SearchIndex to an io.Writer.
+//
+// IMPORTANT: This method calls Flush() before serialization to ensure all soft-deleted
+// documents are permanently removed from the serialized data.
+//
+// The serialization format is:
+// 1. Magic number (4 bytes) - "BM25" identifier for validation
+// 2. Version (4 bytes) - Format version for backward compatibility
+// 3. Statistics:
+//   - numDocs (4 bytes)
+//   - totalTokens (4 bytes)
+//   - avgDocLen (8 bytes as float64)
+//
+// 4. Document lengths (map[uint32]int):
+//   - Count (4 bytes)
+//   - For each entry: docID (4 bytes) + length (4 bytes)
+//
+// 5. Document tokens (map[uint32][]string):
+//   - Count (4 bytes)
+//   - For each entry:
+//   - docID (4 bytes)
+//   - Token count (4 bytes)
+//   - For each token: token length (4 bytes) + token bytes
+//
+// 6. Postings (map[string]*roaring.Bitmap):
+//   - Count (4 bytes)
+//   - For each entry:
+//   - Term length (4 bytes) + term bytes
+//   - Bitmap size (4 bytes) + bitmap bytes
+//
+// 7. Term frequencies (map[string]map[uint32]int):
+//   - Count (4 bytes)
+//   - For each term:
+//   - Term length (4 bytes) + term bytes
+//   - Doc count (4 bytes)
+//   - For each doc: docID (4 bytes) + frequency (4 bytes)
+//
+// 8. Deleted docs bitmap size (4 bytes) + roaring bitmap bytes
+//
+// Thread-safety: Acquires read lock during serialization
+//
+// Returns:
+//   - int64: Number of bytes written
+//   - error: Returns error if write fails or flush fails
+func (ix *BM25SearchIndex) WriteTo(w io.Writer) (int64, error) {
+	// Flush before serializing to remove soft-deleted documents
+	if err := ix.Flush(); err != nil {
+		return 0, fmt.Errorf("failed to flush before serialization: %w", err)
+	}
+
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+
+	var bytesWritten int64
+
+	// Helper function to track writes
+	write := func(data interface{}) error {
+		err := binary.Write(w, binary.LittleEndian, data)
+		if err == nil {
+			switch data.(type) {
+			case uint32, int32:
+				bytesWritten += 4
+			case uint64, int64, float64:
+				bytesWritten += 8
+			}
+		}
+		return err
+	}
+
+	// 1. Write magic number "BM25"
+	magic := [4]byte{'B', 'M', '2', '5'}
+	if _, err := w.Write(magic[:]); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write magic number: %w", err)
+	}
+	bytesWritten += 4
+
+	// 2. Write version
+	version := uint32(1)
+	if err := write(version); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write version: %w", err)
+	}
+
+	// 3. Write statistics
+	numDocs := ix.numDocs.Load()
+	if err := write(numDocs); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write numDocs: %w", err)
+	}
+
+	if err := write(uint32(ix.totalTokens)); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write totalTokens: %w", err)
+	}
+
+	if err := write(ix.avgDocLen); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write avgDocLen: %w", err)
+	}
+
+	// 4. Write document lengths
+	if err := write(uint32(len(ix.docLengths))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write docLengths count: %w", err)
+	}
+	for docID, length := range ix.docLengths {
+		if err := write(docID); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write docLength docID: %w", err)
+		}
+		if err := write(uint32(length)); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write docLength value: %w", err)
+		}
+	}
+
+	// 5. Write document tokens
+	if err := write(uint32(len(ix.docTokens))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write docTokens count: %w", err)
+	}
+	for docID, tokens := range ix.docTokens {
+		if err := write(docID); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write docTokens docID: %w", err)
+		}
+		if err := write(uint32(len(tokens))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write token count: %w", err)
+		}
+		for _, token := range tokens {
+			tokenBytes := []byte(token)
+			if err := write(uint32(len(tokenBytes))); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write token length: %w", err)
+			}
+			if _, err := w.Write(tokenBytes); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write token: %w", err)
+			}
+			bytesWritten += int64(len(tokenBytes))
+		}
+	}
+
+	// 6. Write postings (inverted index)
+	if err := write(uint32(len(ix.postings))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write postings count: %w", err)
+	}
+	for term, bitmap := range ix.postings {
+		termBytes := []byte(term)
+		if err := write(uint32(len(termBytes))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write term length: %w", err)
+		}
+		if _, err := w.Write(termBytes); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write term: %w", err)
+		}
+		bytesWritten += int64(len(termBytes))
+
+		bitmapBytes, err := bitmap.ToBytes()
+		if err != nil {
+			return bytesWritten, fmt.Errorf("failed to serialize posting bitmap: %w", err)
+		}
+		if err := write(uint32(len(bitmapBytes))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write bitmap size: %w", err)
+		}
+		if _, err := w.Write(bitmapBytes); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write bitmap data: %w", err)
+		}
+		bytesWritten += int64(len(bitmapBytes))
+	}
+
+	// 7. Write term frequencies
+	if err := write(uint32(len(ix.tf))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write tf count: %w", err)
+	}
+	for term, docFreqs := range ix.tf {
+		termBytes := []byte(term)
+		if err := write(uint32(len(termBytes))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write tf term length: %w", err)
+		}
+		if _, err := w.Write(termBytes); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write tf term: %w", err)
+		}
+		bytesWritten += int64(len(termBytes))
+
+		if err := write(uint32(len(docFreqs))); err != nil {
+			return bytesWritten, fmt.Errorf("failed to write tf doc count: %w", err)
+		}
+		for docID, freq := range docFreqs {
+			if err := write(docID); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write tf docID: %w", err)
+			}
+			if err := write(uint32(freq)); err != nil {
+				return bytesWritten, fmt.Errorf("failed to write tf frequency: %w", err)
+			}
+		}
+	}
+
+	// 8. Write deleted docs bitmap
+	bitmapBytes, err := ix.deletedDocs.ToBytes()
+	if err != nil {
+		return bytesWritten, fmt.Errorf("failed to serialize deleted docs bitmap: %w", err)
+	}
+	if err := write(uint32(len(bitmapBytes))); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write bitmap size: %w", err)
+	}
+	if _, err := w.Write(bitmapBytes); err != nil {
+		return bytesWritten, fmt.Errorf("failed to write bitmap data: %w", err)
+	}
+	bytesWritten += int64(len(bitmapBytes))
+
+	return bytesWritten, nil
+}
+
+// ReadFrom deserializes a BM25SearchIndex from an io.Reader.
+//
+// This method reconstructs a BM25SearchIndex from the serialized format created by WriteTo.
+// The deserialized index is fully functional and ready to use for searches.
+//
+// Thread-safety: Acquires write lock during deserialization
+//
+// Returns:
+//   - int64: Number of bytes read
+//   - error: Returns error if read fails, format is invalid, or data is corrupted
+//
+// Example:
+//
+//	// Save index
+//	file, _ := os.Create("bm25_index.bin")
+//	idx.WriteTo(file)
+//	file.Close()
+//
+//	// Load index
+//	file, _ := os.Open("bm25_index.bin")
+//	idx2 := NewBM25SearchIndex()
+//	idx2.ReadFrom(file)
+//	file.Close()
+func (ix *BM25SearchIndex) ReadFrom(r io.Reader) (int64, error) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+
+	var bytesRead int64
+
+	// Helper function to track reads
+	read := func(data interface{}) error {
+		err := binary.Read(r, binary.LittleEndian, data)
+		if err == nil {
+			switch data.(type) {
+			case *uint32, *int32:
+				bytesRead += 4
+			case *uint64, *int64, *float64:
+				bytesRead += 8
+			}
+		}
+		return err
+	}
+
+	// 1. Read and validate magic number
+	magic := make([]byte, 4)
+	if _, err := io.ReadFull(r, magic); err != nil {
+		return bytesRead, fmt.Errorf("failed to read magic number: %w", err)
+	}
+	bytesRead += 4
+	if string(magic) != "BM25" {
+		return bytesRead, fmt.Errorf("invalid magic number: expected 'BM25', got '%s'", string(magic))
+	}
+
+	// 2. Read version
+	var version uint32
+	if err := read(&version); err != nil {
+		return bytesRead, fmt.Errorf("failed to read version: %w", err)
+	}
+	if version != 1 {
+		return bytesRead, fmt.Errorf("unsupported version: %d", version)
+	}
+
+	// 3. Read statistics
+	var numDocs uint32
+	if err := read(&numDocs); err != nil {
+		return bytesRead, fmt.Errorf("failed to read numDocs: %w", err)
+	}
+
+	var totalTokens uint32
+	if err := read(&totalTokens); err != nil {
+		return bytesRead, fmt.Errorf("failed to read totalTokens: %w", err)
+	}
+
+	var avgDocLen float64
+	if err := read(&avgDocLen); err != nil {
+		return bytesRead, fmt.Errorf("failed to read avgDocLen: %w", err)
+	}
+
+	// 4. Read document lengths
+	var docLengthsCount uint32
+	if err := read(&docLengthsCount); err != nil {
+		return bytesRead, fmt.Errorf("failed to read docLengths count: %w", err)
+	}
+	docLengths := make(map[uint32]int, docLengthsCount)
+	for i := uint32(0); i < docLengthsCount; i++ {
+		var docID, length uint32
+		if err := read(&docID); err != nil {
+			return bytesRead, fmt.Errorf("failed to read docLength docID: %w", err)
+		}
+		if err := read(&length); err != nil {
+			return bytesRead, fmt.Errorf("failed to read docLength value: %w", err)
+		}
+		docLengths[docID] = int(length)
+	}
+
+	// 5. Read document tokens
+	var docTokensCount uint32
+	if err := read(&docTokensCount); err != nil {
+		return bytesRead, fmt.Errorf("failed to read docTokens count: %w", err)
+	}
+	docTokens := make(map[uint32][]string, docTokensCount)
+	for i := uint32(0); i < docTokensCount; i++ {
+		var docID uint32
+		if err := read(&docID); err != nil {
+			return bytesRead, fmt.Errorf("failed to read docTokens docID: %w", err)
+		}
+
+		var tokenCount uint32
+		if err := read(&tokenCount); err != nil {
+			return bytesRead, fmt.Errorf("failed to read token count: %w", err)
+		}
+
+		tokens := make([]string, tokenCount)
+		for j := uint32(0); j < tokenCount; j++ {
+			var tokenLen uint32
+			if err := read(&tokenLen); err != nil {
+				return bytesRead, fmt.Errorf("failed to read token length: %w", err)
+			}
+
+			tokenBytes := make([]byte, tokenLen)
+			if _, err := io.ReadFull(r, tokenBytes); err != nil {
+				return bytesRead, fmt.Errorf("failed to read token: %w", err)
+			}
+			bytesRead += int64(tokenLen)
+			tokens[j] = string(tokenBytes)
+		}
+		docTokens[docID] = tokens
+	}
+
+	// 6. Read postings (inverted index)
+	var postingsCount uint32
+	if err := read(&postingsCount); err != nil {
+		return bytesRead, fmt.Errorf("failed to read postings count: %w", err)
+	}
+	postings := make(map[string]*roaring.Bitmap, postingsCount)
+	for i := uint32(0); i < postingsCount; i++ {
+		var termLen uint32
+		if err := read(&termLen); err != nil {
+			return bytesRead, fmt.Errorf("failed to read term length: %w", err)
+		}
+
+		termBytes := make([]byte, termLen)
+		if _, err := io.ReadFull(r, termBytes); err != nil {
+			return bytesRead, fmt.Errorf("failed to read term: %w", err)
+		}
+		bytesRead += int64(termLen)
+		term := string(termBytes)
+
+		var bitmapSize uint32
+		if err := read(&bitmapSize); err != nil {
+			return bytesRead, fmt.Errorf("failed to read bitmap size: %w", err)
+		}
+
+		bitmapBytes := make([]byte, bitmapSize)
+		if _, err := io.ReadFull(r, bitmapBytes); err != nil {
+			return bytesRead, fmt.Errorf("failed to read bitmap data: %w", err)
+		}
+		bytesRead += int64(bitmapSize)
+
+		bitmap := roaring.New()
+		if err := bitmap.UnmarshalBinary(bitmapBytes); err != nil {
+			return bytesRead, fmt.Errorf("failed to deserialize posting bitmap: %w", err)
+		}
+		postings[term] = bitmap
+	}
+
+	// 7. Read term frequencies
+	var tfCount uint32
+	if err := read(&tfCount); err != nil {
+		return bytesRead, fmt.Errorf("failed to read tf count: %w", err)
+	}
+	tf := make(map[string]map[uint32]int, tfCount)
+	for i := uint32(0); i < tfCount; i++ {
+		var termLen uint32
+		if err := read(&termLen); err != nil {
+			return bytesRead, fmt.Errorf("failed to read tf term length: %w", err)
+		}
+
+		termBytes := make([]byte, termLen)
+		if _, err := io.ReadFull(r, termBytes); err != nil {
+			return bytesRead, fmt.Errorf("failed to read tf term: %w", err)
+		}
+		bytesRead += int64(termLen)
+		term := string(termBytes)
+
+		var docCount uint32
+		if err := read(&docCount); err != nil {
+			return bytesRead, fmt.Errorf("failed to read tf doc count: %w", err)
+		}
+
+		docFreqs := make(map[uint32]int, docCount)
+		for j := uint32(0); j < docCount; j++ {
+			var docID, freq uint32
+			if err := read(&docID); err != nil {
+				return bytesRead, fmt.Errorf("failed to read tf docID: %w", err)
+			}
+			if err := read(&freq); err != nil {
+				return bytesRead, fmt.Errorf("failed to read tf frequency: %w", err)
+			}
+			docFreqs[docID] = int(freq)
+		}
+		tf[term] = docFreqs
+	}
+
+	// 8. Read deleted docs bitmap
+	var bitmapSize uint32
+	if err := read(&bitmapSize); err != nil {
+		return bytesRead, fmt.Errorf("failed to read bitmap size: %w", err)
+	}
+
+	bitmapBytes := make([]byte, bitmapSize)
+	if _, err := io.ReadFull(r, bitmapBytes); err != nil {
+		return bytesRead, fmt.Errorf("failed to read bitmap data: %w", err)
+	}
+	bytesRead += int64(bitmapSize)
+
+	deletedDocs := roaring.New()
+	if err := deletedDocs.UnmarshalBinary(bitmapBytes); err != nil {
+		return bytesRead, fmt.Errorf("failed to deserialize deleted docs bitmap: %w", err)
+	}
+
+	// Update index state
+	ix.numDocs.Store(numDocs)
+	ix.totalTokens = int(totalTokens)
+	ix.avgDocLen = avgDocLen
+	ix.docLengths = docLengths
+	ix.docTokens = docTokens
+	ix.postings = postings
+	ix.tf = tf
+	ix.deletedDocs = deletedDocs
+
+	return bytesRead, nil
 }
