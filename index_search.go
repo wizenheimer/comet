@@ -98,3 +98,15 @@ type TextSearch interface {
 	// Execute the search and return the results
 	Execute() ([]TextResult, error)
 }
+
+// MetadataSearch encapsulates the search context for the metadata index
+type MetadataSearch interface {
+	// WithFilters sets the filters to apply (AND logic between filters)
+	WithFilters(filters ...Filter) MetadataSearch
+
+	// WithFilterGroups sets complex filter groups with OR logic
+	WithFilterGroups(groups ...*FilterGroup) MetadataSearch
+
+	// Execute the search and return the results
+	Execute() ([]MetadataResult, error)
+}

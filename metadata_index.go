@@ -62,21 +62,6 @@ import (
 	bsi "github.com/RoaringBitmap/roaring/BitSliceIndexing"
 )
 
-// MetadataIndex is the interface for filtering documents based on metadata
-type MetadataIndex interface {
-	// Add adds a document with its metadata to the index
-	Add(node MetadataNode) error
-
-	// Remove removes a document from the index
-	Remove(node MetadataNode) error
-
-	// NewSearch creates a new search builder
-	NewSearch() MetadataSearch
-
-	// Flush the metadata index
-	Flush() error
-}
-
 // Compile-time check to ensure RoaringMetadataIndex implements MetadataIndex
 var _ MetadataIndex = (*RoaringMetadataIndex)(nil)
 

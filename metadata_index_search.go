@@ -15,18 +15,6 @@ func (r MetadataResult) GetId() uint32 {
 	return r.Node.ID()
 }
 
-// MetadataSearch encapsulates the search context for the metadata index
-type MetadataSearch interface {
-	// WithFilters sets the filters to apply (AND logic between filters)
-	WithFilters(filters ...Filter) MetadataSearch
-
-	// WithFilterGroups sets complex filter groups with OR logic
-	WithFilterGroups(groups ...*FilterGroup) MetadataSearch
-
-	// Execute the search and return the results
-	Execute() ([]MetadataResult, error)
-}
-
 // Compile-time checks to ensure metadataFilterSearch implements MetadataSearch
 var _ MetadataSearch = (*metadataFilterSearch)(nil)
 

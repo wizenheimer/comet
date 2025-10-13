@@ -69,3 +69,49 @@ type TextIndex interface {
 	// Flush the text index
 	Flush() error
 }
+
+// MetadataIndex is the interface for filtering documents based on metadata
+type MetadataIndex interface {
+	// Add adds a document with its metadata to the index
+	Add(node MetadataNode) error
+
+	// Remove removes a document from the index
+	Remove(node MetadataNode) error
+
+	// NewSearch creates a new search builder
+	NewSearch() MetadataSearch
+
+	// Flush the metadata index
+	Flush() error
+}
+
+// HybridSearchIndex provides a unified interface for multi-modal search
+type HybridSearchIndex interface {
+	// Add adds a document with its vector, text, and metadata to the index
+	// The ID is auto-generated and returned
+	Add(vector []float32, text string, metadata map[string]interface{}) (uint32, error)
+
+	// AddWithID adds a document with a specific ID
+	AddWithID(id uint32, vector []float32, text string, metadata map[string]interface{}) error
+
+	// Remove removes a document from all indexes
+	Remove(id uint32) error
+
+	// NewSearch creates a new search builder
+	NewSearch() HybridSearch
+
+	// Train trains the vector index (required for some index types like IVF, PQ)
+	Train(vectors [][]float32) error
+
+	// Flush flushes all indexes
+	Flush() error
+
+	// VectorIndex returns the underlying vector index
+	VectorIndex() VectorIndex
+
+	// TextIndex returns the underlying text index
+	TextIndex() TextIndex
+
+	// MetadataIndex returns the underlying metadata index
+	MetadataIndex() MetadataIndex
+}
