@@ -1,5 +1,7 @@
 # Comet
 
+![Cover](media/cover.png)
+
 A high-performance hybrid vector index written in Go. Comet brings together multiple indexing strategies and search modalities into a unified, hackable package. Hybrid retrieval with reciprocal rank fusion, autocut, pre-filtering, semantic search, full-text search, and multi-KNN searches, and multi-query operations — all in pure Go.
 
 Understand search internals from the inside out. Built for hackers, not hyperscalers. Tiny enough to fit in your head. Decent enough to blow it.
