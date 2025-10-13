@@ -505,4 +505,3 @@ func TestWeightedSumFusion_ZeroWeights(t *testing.T) {
 		t.Errorf("Expected 0.5, got %f", combined[1])
 	}
 }
-

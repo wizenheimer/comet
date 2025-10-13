@@ -352,9 +352,10 @@ func (idx *FlatIndex) Trained() bool {
 // 4. Distance kind length (4 bytes) + distance kind string
 // 5. Number of vectors (4 bytes)
 // 6. For each vector:
-//    - Vector ID (4 bytes)
-//    - Vector dimension (4 bytes)
-//    - Vector data (dim * 4 bytes as float32)
+//   - Vector ID (4 bytes)
+//   - Vector dimension (4 bytes)
+//   - Vector data (dim * 4 bytes as float32)
+//
 // 7. Deleted nodes bitmap size (4 bytes) + roaring bitmap bytes
 //
 // Thread-safety: Acquires read lock during serialization
