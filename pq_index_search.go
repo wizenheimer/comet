@@ -165,6 +165,10 @@ func (s *pqIndexSearch) lookupNodeVectors() ([][]float32, error) {
 		found := false
 		for _, v := range s.index.vectorNodes {
 			if v.ID() == nodeID {
+				// SOFT DELETE CHECK: Skip deleted nodes
+				if s.index.deletedNodes.Contains(nodeID) {
+					return nil, fmt.Errorf("node ID %d not found in index (deleted)", nodeID)
+				}
 				queries = append(queries, v.Vector())
 				found = true
 				break
@@ -258,6 +262,11 @@ func (s *pqIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, erro
 	results := make([]result, 0, len(s.index.codes))
 
 	for i, code := range s.index.codes {
+		// SOFT DELETE CHECK: Skip deleted nodes
+		if s.index.deletedNodes.Contains(s.index.vectorNodes[i].ID()) {
+			continue
+		}
+
 		// Apply document ID filter if set (metadata pre-filtering)
 		if docFilter.ShouldSkip(s.index.vectorNodes[i].ID()) {
 			continue

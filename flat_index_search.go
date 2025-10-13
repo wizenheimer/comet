@@ -164,6 +164,10 @@ func (s *flatIndexSearch) lookupNodeVectors() ([][]float32, error) {
 		found := false
 		for _, v := range s.index.vectors {
 			if v.ID() == nodeID {
+				// SOFT DELETE CHECK: Skip deleted nodes
+				if s.index.deletedNodes.Contains(nodeID) {
+					return nil, fmt.Errorf("node ID %d not found in index (deleted)", nodeID)
+				}
 				queries = append(queries, v.Vector())
 				found = true
 				break
@@ -235,6 +239,11 @@ func (s *flatIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, er
 	results := make([]result, 0, len(s.index.vectors))
 
 	for _, v := range s.index.vectors {
+		// SOFT DELETE CHECK: Skip deleted nodes
+		if s.index.deletedNodes.Contains(v.ID()) {
+			continue
+		}
+
 		// Apply document ID filter if set (metadata pre-filtering)
 		if docFilter.ShouldSkip(v.ID()) {
 			continue

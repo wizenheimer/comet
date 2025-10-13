@@ -170,17 +170,33 @@ func TestBM25SearchIndexRemove(t *testing.T) {
 		}
 	}
 
-	// Remove a document
+	// Remove a document (soft delete)
 	if err := idx.Remove(2); err != nil {
 		t.Errorf("Remove() error = %v", err)
 	}
 
+	// With soft delete, document still in internal structures
+	if idx.numDocs.Load() != 3 {
+		t.Errorf("numDocs = %d, want 3 (before flush)", idx.numDocs.Load())
+	}
+
+	// Document should still be in docTokens (soft delete)
+	if _, exists := idx.docTokens[2]; !exists {
+		t.Error("soft-deleted document should still be in index before flush")
+	}
+
+	// Flush to perform hard delete
+	if err := idx.Flush(); err != nil {
+		t.Errorf("Flush() error = %v", err)
+	}
+
+	// After flush, document should be physically removed
 	if idx.numDocs.Load() != 2 {
-		t.Errorf("numDocs = %d, want 2", idx.numDocs.Load())
+		t.Errorf("numDocs = %d, want 2 (after flush)", idx.numDocs.Load())
 	}
 
 	if _, exists := idx.docTokens[2]; exists {
-		t.Error("removed document still in index")
+		t.Error("removed document still in index after flush")
 	}
 
 	// Remove non-existent document (should not error)
@@ -196,12 +212,128 @@ func TestBM25SearchIndexRemove(t *testing.T) {
 		t.Errorf("Remove() error = %v", err)
 	}
 
+	// Still 2 documents before flush
+	if idx.numDocs.Load() != 2 {
+		t.Errorf("numDocs = %d, want 2 (before final flush)", idx.numDocs.Load())
+	}
+
+	// Flush to remove all
+	if err := idx.Flush(); err != nil {
+		t.Errorf("Flush() error = %v", err)
+	}
+
 	if idx.numDocs.Load() != 0 {
 		t.Errorf("numDocs = %d, want 0", idx.numDocs.Load())
 	}
 
 	if idx.avgDocLen != 0 {
 		t.Errorf("avgDocLen = %f, want 0", idx.avgDocLen)
+	}
+}
+
+// TestBM25SoftDeleteWithSearch tests soft delete functionality with search
+func TestBM25SoftDeleteWithSearch(t *testing.T) {
+	idx := NewBM25SearchIndex()
+
+	// Add documents
+	docs := map[uint32]string{
+		1: "the quick brown fox jumps over the lazy dog",
+		2: "a fast fox runs through the forest",
+		3: "lazy cats sleep all day",
+		4: "the dog chases the cat",
+	}
+
+	for id, text := range docs {
+		if err := idx.Add(id, text); err != nil {
+			t.Fatalf("Add() error = %v", err)
+		}
+	}
+
+	// Search for "fox" - should get docs 1 and 2
+	results, err := idx.NewSearch().WithQuery("fox").WithK(10).Execute()
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("Before delete: got %d results, want 2", len(results))
+	}
+
+	// Soft delete doc 1
+	if err := idx.Remove(1); err != nil {
+		t.Errorf("Remove() error = %v", err)
+	}
+
+	// Search again for "fox" - should only get doc 2 now
+	results, err = idx.NewSearch().WithQuery("fox").WithK(10).Execute()
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("After soft delete: got %d results, want 1", len(results))
+	}
+	if len(results) > 0 && results[0].Id != 2 {
+		t.Errorf("After soft delete: got doc %d, want doc 2", results[0].Id)
+	}
+
+	// Verify doc 1 still exists in internal structure
+	if _, exists := idx.docTokens[1]; !exists {
+		t.Error("soft-deleted document should still be in index before flush")
+	}
+
+	// Search for "lazy" - should get docs 2 and 3 (doc 1 is soft-deleted)
+	results, err = idx.NewSearch().WithQuery("lazy").WithK(10).Execute()
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("Search for 'lazy': got %d results, want 1", len(results))
+	}
+	if len(results) > 0 && results[0].Id != 3 {
+		t.Errorf("Search for 'lazy': got doc %d, want doc 3", results[0].Id)
+	}
+
+	// Test WithNode with deleted document (should fail)
+	_, err = idx.NewSearch().WithNode(1).WithK(5).Execute()
+	if err == nil {
+		t.Error("WithNode for deleted document should return error")
+	}
+
+	// Test WithNode with non-deleted document (should succeed)
+	_, err = idx.NewSearch().WithNode(2).WithK(5).Execute()
+	if err != nil {
+		t.Errorf("WithNode for non-deleted document error = %v", err)
+	}
+
+	// Flush to perform hard delete
+	if err := idx.Flush(); err != nil {
+		t.Errorf("Flush() error = %v", err)
+	}
+
+	// Verify doc 1 is physically removed after flush
+	if _, exists := idx.docTokens[1]; exists {
+		t.Error("deleted document should be removed from index after flush")
+	}
+
+	// Search again for "fox" - should still only get doc 2
+	results, err = idx.NewSearch().WithQuery("fox").WithK(10).Execute()
+	if err != nil {
+		t.Fatalf("Search() after flush error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("After flush: got %d results, want 1", len(results))
+	}
+	if len(results) > 0 && results[0].Id != 2 {
+		t.Errorf("After flush: got doc %d, want doc 2", results[0].Id)
+	}
+
+	// Verify numDocs is correct after flush
+	if idx.numDocs.Load() != 3 {
+		t.Errorf("numDocs = %d, want 3 after flush", idx.numDocs.Load())
+	}
+
+	// Remove already deleted document (should be no-op)
+	if err := idx.Remove(1); err != nil {
+		t.Errorf("Remove already deleted error = %v", err)
 	}
 }
 
@@ -392,17 +524,64 @@ func TestBM25SearchTopK(t *testing.T) {
 func TestBM25Flush(t *testing.T) {
 	idx := NewBM25SearchIndex()
 
-	// Add a document
-	if err := idx.Add(1, "test document"); err != nil {
-		t.Fatalf("Add() error = %v", err)
+	// Add documents
+	docs := map[uint32]string{
+		1: "test document one",
+		2: "test document two",
+		3: "test document three",
 	}
 
-	// Flush should not error
+	for id, text := range docs {
+		if err := idx.Add(id, text); err != nil {
+			t.Fatalf("Add() error = %v", err)
+		}
+	}
+
+	// Test 1: Flush with no deletions (should be no-op)
+	if err := idx.Flush(); err != nil {
+		t.Errorf("Flush() with no deletions error = %v", err)
+	}
+
+	if idx.numDocs.Load() != 3 {
+		t.Errorf("After flush with no deletions: numDocs = %d, want 3", idx.numDocs.Load())
+	}
+
+	if idx.deletedDocs.GetCardinality() != 0 {
+		t.Errorf("deletedDocs cardinality = %d, want 0", idx.deletedDocs.GetCardinality())
+	}
+
+	// Test 2: Soft delete some documents
+	if err := idx.Remove(2); err != nil {
+		t.Errorf("Remove() error = %v", err)
+	}
+
+	// Verify soft delete
+	if idx.numDocs.Load() != 3 {
+		t.Errorf("After soft delete: numDocs = %d, want 3", idx.numDocs.Load())
+	}
+
+	if idx.deletedDocs.GetCardinality() != 1 {
+		t.Errorf("deletedDocs cardinality = %d, want 1", idx.deletedDocs.GetCardinality())
+	}
+
+	// Test 3: Flush should perform hard delete
 	if err := idx.Flush(); err != nil {
 		t.Errorf("Flush() error = %v", err)
 	}
 
-	// Document should still be searchable after flush
+	if idx.numDocs.Load() != 2 {
+		t.Errorf("After flush: numDocs = %d, want 2", idx.numDocs.Load())
+	}
+
+	if idx.deletedDocs.GetCardinality() != 0 {
+		t.Errorf("After flush: deletedDocs cardinality = %d, want 0", idx.deletedDocs.GetCardinality())
+	}
+
+	if _, exists := idx.docTokens[2]; exists {
+		t.Error("Deleted document still in index after flush")
+	}
+
+	// Test 4: Remaining documents should still be searchable
 	results, err := idx.NewSearch().
 		WithQuery("test").
 		WithK(5).
@@ -410,8 +589,28 @@ func TestBM25Flush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if len(results) != 1 {
-		t.Errorf("After Flush(), Execute() returned %d results, want 1", len(results))
+	if len(results) != 2 {
+		t.Errorf("After Flush(), Execute() returned %d results, want 2", len(results))
+	}
+
+	// Test 5: Delete all remaining documents and flush
+	if err := idx.Remove(1); err != nil {
+		t.Errorf("Remove() error = %v", err)
+	}
+	if err := idx.Remove(3); err != nil {
+		t.Errorf("Remove() error = %v", err)
+	}
+
+	if err := idx.Flush(); err != nil {
+		t.Errorf("Final Flush() error = %v", err)
+	}
+
+	if idx.numDocs.Load() != 0 {
+		t.Errorf("After final flush: numDocs = %d, want 0", idx.numDocs.Load())
+	}
+
+	if idx.avgDocLen != 0 {
+		t.Errorf("After final flush: avgDocLen = %f, want 0", idx.avgDocLen)
 	}
 }
 

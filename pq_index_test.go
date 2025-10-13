@@ -373,18 +373,34 @@ func TestPQIndexRemove(t *testing.T) {
 	idx.Add(*node2)
 	idx.Add(*node3)
 
-	// Remove middle node
+	// Remove middle node (soft delete)
 	err = idx.Remove(*node2)
 	if err != nil {
 		t.Errorf("Remove() error: %v", err)
 	}
 
+	// Vectors should still be in slices (soft delete)
+	if len(idx.codes) != 3 {
+		t.Errorf("Expected 3 codes after soft delete, got %d", len(idx.codes))
+	}
+
+	if len(idx.vectorNodes) != 3 {
+		t.Errorf("Expected 3 vector nodes after soft delete, got %d", len(idx.vectorNodes))
+	}
+
+	// Call Flush to perform hard delete
+	err = idx.Flush()
+	if err != nil {
+		t.Errorf("Flush() error: %v", err)
+	}
+
+	// Now vectors should be physically removed
 	if len(idx.codes) != 2 {
-		t.Errorf("Expected 2 codes after removal, got %d", len(idx.codes))
+		t.Errorf("Expected 2 codes after flush, got %d", len(idx.codes))
 	}
 
 	if len(idx.vectorNodes) != 2 {
-		t.Errorf("Expected 2 vector nodes after removal, got %d", len(idx.vectorNodes))
+		t.Errorf("Expected 2 vector nodes after flush, got %d", len(idx.vectorNodes))
 	}
 
 	// Verify correct nodes remain
@@ -393,6 +409,12 @@ func TestPQIndexRemove(t *testing.T) {
 		if node.ID() != remainingIDs[i] {
 			t.Errorf("Node %d has ID %d, want %d", i, node.ID(), remainingIDs[i])
 		}
+	}
+
+	// Try to remove already deleted vector
+	err = idx.Remove(*node2)
+	if err == nil {
+		t.Error("Remove() expected error for already deleted vector")
 	}
 }
 
@@ -429,15 +451,79 @@ func TestPQIndexRemoveNonExistent(t *testing.T) {
 
 // TestPQIndexFlush tests the flush method
 func TestPQIndexFlush(t *testing.T) {
-	idx, err := NewPQIndex(8, Euclidean, 4, 6)
+	dim := 8
+	M := 4
+	Nbits := 6
+
+	idx, err := NewPQIndex(dim, Euclidean, M, Nbits)
 	if err != nil {
 		t.Fatalf("NewPQIndex() error: %v", err)
 	}
 
-	// Flush should be a no-op and return no error
-	err = idx.Flush()
-	if err != nil {
+	// Train the index
+	trainingVectors := make([]VectorNode, 100)
+	for i := 0; i < 100; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	idx.Train(trainingVectors)
+
+	// Add some vectors
+	node1 := NewVectorNode([]float32{1, 2, 3, 4, 5, 6, 7, 8})
+	node2 := NewVectorNode([]float32{2, 3, 4, 5, 6, 7, 8, 9})
+	node3 := NewVectorNode([]float32{3, 4, 5, 6, 7, 8, 9, 10})
+
+	idx.Add(*node1)
+	idx.Add(*node2)
+	idx.Add(*node3)
+
+	// Flush with no deletions should succeed and keep all vectors
+	if err := idx.Flush(); err != nil {
 		t.Errorf("Flush() error: %v", err)
+	}
+	if len(idx.codes) != 3 {
+		t.Errorf("Expected 3 codes after flush with no deletions, got %d", len(idx.codes))
+	}
+
+	// Soft delete two vectors
+	idx.Remove(*node1)
+	idx.Remove(*node2)
+
+	// Vectors still in memory before flush
+	if len(idx.codes) != 3 {
+		t.Errorf("Expected 3 codes before flush, got %d", len(idx.codes))
+	}
+
+	// Flush should remove deleted vectors
+	if err := idx.Flush(); err != nil {
+		t.Errorf("Flush() error: %v", err)
+	}
+
+	// Only one vector should remain
+	if len(idx.codes) != 1 {
+		t.Errorf("Expected 1 code after flush, got %d", len(idx.codes))
+	}
+
+	if len(idx.vectorNodes) != 1 {
+		t.Errorf("Expected 1 vector node after flush, got %d", len(idx.vectorNodes))
+	}
+
+	// Verify the remaining vector is node3
+	if idx.vectorNodes[0].ID() != node3.ID() {
+		t.Errorf("Expected remaining vector to be node3, got node with ID %d", idx.vectorNodes[0].ID())
+	}
+
+	// Verify deleted bitmap is cleared
+	if idx.deletedNodes.GetCardinality() != 0 {
+		t.Errorf("Expected deletedNodes bitmap to be empty after flush, got cardinality %d", idx.deletedNodes.GetCardinality())
+	}
+
+	// Multiple flushes should be safe
+	if err := idx.Flush(); err != nil {
+		t.Errorf("Second Flush() error: %v", err)
 	}
 }
 
@@ -859,5 +945,117 @@ func TestPQIndexMultipleTraining(t *testing.T) {
 	// Should still be trained
 	if !idx.Trained() {
 		t.Error("Index should be trained after retraining")
+	}
+}
+
+// TestPQIndexSoftDeleteWithSearch tests that soft-deleted nodes are filtered during search
+func TestPQIndexSoftDeleteWithSearch(t *testing.T) {
+	dim := 8
+	M := 4
+	Nbits := 6
+
+	idx, err := NewPQIndex(dim, Euclidean, M, Nbits)
+	if err != nil {
+		t.Fatalf("NewPQIndex() error: %v", err)
+	}
+
+	// Train the index
+	trainingVectors := make([]VectorNode, 100)
+	for i := 0; i < 100; i++ {
+		vec := make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			vec[j] = float32(i)
+		}
+		trainingVectors[i] = *NewVectorNode(vec)
+	}
+	idx.Train(trainingVectors)
+
+	// Add test vectors
+	node1 := NewVectorNode([]float32{1, 0, 0, 0, 0, 0, 0, 0})
+	node2 := NewVectorNode([]float32{2, 0, 0, 0, 0, 0, 0, 0})
+	node3 := NewVectorNode([]float32{3, 0, 0, 0, 0, 0, 0, 0})
+	node4 := NewVectorNode([]float32{4, 0, 0, 0, 0, 0, 0, 0})
+
+	idx.Add(*node1)
+	idx.Add(*node2)
+	idx.Add(*node3)
+	idx.Add(*node4)
+
+	// Search should return all 4 vectors
+	query := []float32{1.5, 0, 0, 0, 0, 0, 0, 0}
+	results, err := idx.NewSearch().WithQuery(query).WithK(10).Execute()
+	if err != nil {
+		t.Fatalf("Search error: %v", err)
+	}
+	if len(results) != 4 {
+		t.Errorf("Expected 4 results before deletion, got %d", len(results))
+	}
+
+	// Soft delete node2 and node3
+	idx.Remove(*node2)
+	idx.Remove(*node3)
+
+	// Search should now return only 2 vectors (node1 and node4)
+	results, err = idx.NewSearch().WithQuery(query).WithK(10).Execute()
+	if err != nil {
+		t.Fatalf("Search error after soft delete: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results after soft delete, got %d", len(results))
+	}
+
+	// Verify the correct nodes are returned
+	resultIDs := make(map[uint32]bool)
+	for _, r := range results {
+		resultIDs[r.Node.ID()] = true
+	}
+	if !resultIDs[node1.ID()] {
+		t.Error("Expected node1 in results")
+	}
+	if !resultIDs[node4.ID()] {
+		t.Error("Expected node4 in results")
+	}
+	if resultIDs[node2.ID()] {
+		t.Error("Did not expect node2 (soft deleted) in results")
+	}
+	if resultIDs[node3.ID()] {
+		t.Error("Did not expect node3 (soft deleted) in results")
+	}
+
+	// Test search by node ID - should fail for deleted nodes
+	_, err = idx.NewSearch().WithNode(node2.ID()).WithK(5).Execute()
+	if err == nil {
+		t.Error("Expected error when searching by deleted node ID")
+	}
+
+	// Test search by node ID - should succeed for non-deleted nodes
+	results, err = idx.NewSearch().WithNode(node1.ID()).WithK(5).Execute()
+	if err != nil {
+		t.Errorf("Search by non-deleted node ID failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results when searching by node1, got %d", len(results))
+	}
+
+	// After flush, search should still return 2 vectors
+	err = idx.Flush()
+	if err != nil {
+		t.Fatalf("Flush error: %v", err)
+	}
+
+	results, err = idx.NewSearch().WithQuery(query).WithK(10).Execute()
+	if err != nil {
+		t.Fatalf("Search error after flush: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results after flush, got %d", len(results))
+	}
+
+	// Verify physical removal
+	if len(idx.codes) != 2 {
+		t.Errorf("Expected 2 codes in storage after flush, got %d", len(idx.codes))
+	}
+	if len(idx.vectorNodes) != 2 {
+		t.Errorf("Expected 2 vector nodes in storage after flush, got %d", len(idx.vectorNodes))
 	}
 }

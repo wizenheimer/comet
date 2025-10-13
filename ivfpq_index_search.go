@@ -171,6 +171,10 @@ func (s *ivfpqIndexSearch) lookupNodeVectors() ([][]float32, error) {
 		for _, list := range s.index.lists {
 			for _, cv := range list {
 				if cv.Node.ID() == nodeID {
+					// SOFT DELETE CHECK: Skip deleted nodes
+					if s.index.deletedNodes.Contains(nodeID) {
+						return nil, fmt.Errorf("node ID %d not found in index (deleted)", nodeID)
+					}
 					queries = append(queries, cv.Node.Vector())
 					found = true
 					break
@@ -280,6 +284,11 @@ func (s *ivfpqIndexSearch) searchSingleQuery(query []float32) ([]VectorResult, e
 
 		// Compute distances for all vectors in this list
 		for _, cv := range s.index.lists[listIdx] {
+			// SOFT DELETE CHECK: Skip deleted nodes
+			if s.index.deletedNodes.Contains(cv.Node.ID()) {
+				continue
+			}
+
 			// Apply document ID filter if set (metadata pre-filtering)
 			if docFilter.ShouldSkip(cv.Node.ID()) {
 				continue

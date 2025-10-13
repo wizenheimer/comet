@@ -236,6 +236,11 @@ func (s *bm25TextSearch) lookupNodeTexts() ([]string, error) {
 
 	queries := make([]string, 0, len(s.nodeIDs))
 	for _, nodeID := range s.nodeIDs {
+		// SOFT DELETE CHECK: Skip deleted documents
+		if s.index.deletedDocs.Contains(nodeID) {
+			return nil, fmt.Errorf("node ID %d not found in index (deleted)", nodeID)
+		}
+
 		tokens, exists := s.index.docTokens[nodeID]
 		if !exists {
 			return nil, fmt.Errorf("node ID %d not found in index", nodeID)
@@ -302,10 +307,17 @@ func (s *bm25TextSearch) searchSingleQuery(query string) ([]TextResult, error) {
 
 		for iter := bitmap.Iterator(); iter.HasNext(); {
 			docID := iter.Next()
+
+			// SOFT DELETE CHECK: Skip deleted documents
+			if s.index.deletedDocs.Contains(docID) {
+				continue
+			}
+
 			// Apply document filter
 			if docFilter.ShouldSkip(docID) {
 				continue
 			}
+
 			tfVal := float64(s.index.tf[t][docID])
 			docLen := float64(s.index.docLengths[docID])
 			// BM25 scoring formula

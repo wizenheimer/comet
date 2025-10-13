@@ -45,6 +45,8 @@ package comet
 import (
 	"fmt"
 	"sync"
+
+	"github.com/RoaringBitmap/roaring"
 )
 
 // Compile-time checks to ensure FlatIndex implements VectorIndex
@@ -76,6 +78,13 @@ type FlatIndex struct {
 	//   - For cosine metric: vectors are stored in normalized form
 	//   - For euclidean metric: vectors are stored as-is
 	vectors []VectorNode
+
+	// deletedNodes tracks soft-deleted IDs using roaring bitmap
+	// CRITICAL OPTIMIZATION: RoaringBitmap is much more efficient than map[uint32]bool
+	// - O(log n) membership test with better memory efficiency
+	// - Compressed bitmap representation
+	// - Fast iteration for batch operations
+	deletedNodes *roaring.Bitmap
 
 	// mu provides thread-safe access to the index.
 	// RWMutex allows multiple concurrent readers (Search) but exclusive writers (Add).
@@ -122,6 +131,7 @@ func NewFlatIndex(dim int, distanceKind DistanceKind) (*FlatIndex, error) {
 		distanceKind: distanceKind,
 		distance:     distance,
 		vectors:      make([]VectorNode, 0),
+		deletedNodes: roaring.New(), // Initialize empty bitmap for soft deletes
 	}, nil
 }
 
@@ -176,42 +186,113 @@ func (idx *FlatIndex) Add(vector VectorNode) error {
 	return nil
 }
 
-// Remove removes a vector from the flat index.
+// Remove performs soft delete using roaring bitmap.
 //
-// This performs a linear search to find the vector with the matching ID and removes it.
-// For large indexes, this operation can be slow O(n).
+// CONCURRENCY OPTIMIZATION:
+// - Uses read lock first (cheaper) to check if node exists
+// - Only acquires write lock for the actual bitmap modification
+// - Minimizes write lock contention
+//
+// SOFT DELETE MECHANISM:
+// Instead of immediately removing from the vectors slice (expensive O(n)),
+// we mark as deleted in roaring bitmap. Deleted nodes are:
+//   - Skipped during search
+//   - Still in vectors slice
+//   - Not counted as active nodes
+//
+// Call Flush() periodically for actual cleanup and memory reclamation.
 //
 // Parameters:
 //   - vector: Vector to remove (only the ID field is used for matching)
 //
 // Returns:
-//   - error: Returns error if vector is not found
+//   - error: Returns error if vector is not found or already deleted
 //
-// Time Complexity: O(n) where n = number of vectors
+// Time Complexity: O(n) for existence check + O(log n) for bitmap operation
 //
-// Thread-safety: Acquires exclusive lock
+// Thread-safety: Uses read lock for validation, write lock for modification
 func (idx *FlatIndex) Remove(vector VectorNode) error {
+	id := vector.ID()
+
+	// ════════════════════════════════════════════════════════════════════════
+	// STEP 1: CHECK EXISTENCE (READ LOCK - CHEAPER)
+	// ════════════════════════════════════════════════════════════════════════
+	idx.mu.RLock()
+	exists := false
+	for _, v := range idx.vectors {
+		if v.ID() == id {
+			exists = true
+			break
+		}
+	}
+	alreadyDeleted := idx.deletedNodes.Contains(id)
+	idx.mu.RUnlock()
+
+	// Fast-fail validation outside of write lock
+	if !exists {
+		return fmt.Errorf("vector with ID %d not found", id)
+	}
+	if alreadyDeleted {
+		return fmt.Errorf("vector with ID %d already deleted", id)
+	}
+
+	// ════════════════════════════════════════════════════════════════════════
+	// STEP 2: MARK AS DELETED (WRITE LOCK - ONLY FOR BITMAP UPDATE)
+	// ════════════════════════════════════════════════════════════════════════
+	idx.mu.Lock()
+	idx.deletedNodes.Add(id)
+	idx.mu.Unlock()
+
+	return nil
+}
+
+// Flush performs hard delete of soft-deleted nodes.
+//
+// WHEN TO CALL:
+//   - After multiple Remove() calls (batch cleanup)
+//   - When deleted nodes are significant (e.g., > 10% of index)
+//   - During off-peak hours
+//
+// WHAT IT DOES:
+// 1. Removes all soft-deleted vectors from the vectors slice
+// 2. Reclaims memory occupied by deleted vectors
+// 3. Clears the deleted nodes bitmap
+//
+// COST: O(n) where n = number of vectors in the index
+//
+// Thread-safety: Acquires exclusive write lock
+func (idx *FlatIndex) Flush() error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	// Find the vector with matching ID
-	for i, v := range idx.vectors {
-		if v.ID() == vector.ID() {
-			// Remove by slicing around the element
-			idx.vectors = append(idx.vectors[:i], idx.vectors[i+1:]...)
-			return nil
+	// Quick exit if nothing to flush
+	deletedCount := int(idx.deletedNodes.GetCardinality())
+	if deletedCount == 0 {
+		return nil
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// PHASE 1: FILTER OUT DELETED VECTORS
+	// ═══════════════════════════════════════════════════════════════════════
+	// Pre-allocate slice with capacity for non-deleted vectors
+	activeVectors := make([]VectorNode, 0, len(idx.vectors)-deletedCount)
+
+	for _, v := range idx.vectors {
+		// Keep vector only if NOT deleted
+		// RoaringBitmap Contains() is very fast - O(log n)
+		if !idx.deletedNodes.Contains(v.ID()) {
+			activeVectors = append(activeVectors, v)
 		}
 	}
 
-	return fmt.Errorf("vector with ID %d not found", vector.ID())
-}
+	// Replace vectors slice with filtered version
+	idx.vectors = activeVectors
 
-// Flush is a no-op for flat index since vectors are stored in memory.
-// This method exists to satisfy the VectorIndex interface.
-//
-// Returns:
-//   - error: Always returns nil
-func (idx *FlatIndex) Flush() error {
+	// ═══════════════════════════════════════════════════════════════════════
+	// PHASE 2: RESET DELETED TRACKING
+	// ═══════════════════════════════════════════════════════════════════════
+	idx.deletedNodes.Clear()
+
 	return nil
 }
 
