@@ -6,13 +6,42 @@ import (
 	"github.com/RoaringBitmap/roaring"
 )
 
-// MetadataResult represents a search result for a metadata node
+// MetadataResult represents a search result from metadata filtering.
+//
+// Unlike vector and text results which have meaningful scores, metadata
+// results are binary (match or no match). All returned results match
+// the filter criteria, so they don't have associated relevance scores.
+//
+// The result contains the full metadata node, allowing access to all
+// metadata fields of matched documents.
+//
+// Example:
+//
+//	results, _ := metaIndex.NewSearch().
+//	    WithFilters(
+//	        comet.Eq("category", "electronics"),
+//	        comet.Lte("price", 1000),
+//	    ).
+//	    Execute()
+//
+//	for _, result := range results {
+//	    fmt.Printf("ID: %d\n", result.GetId())
+//	    fmt.Printf("Metadata: %v\n", result.Node.Metadata())
+//	}
 type MetadataResult struct {
+	// Node is the matched metadata node containing ID and metadata fields
 	Node MetadataNode
 }
 
+// GetId returns the ID of the matched document.
 func (r MetadataResult) GetId() uint32 {
 	return r.Node.ID()
+}
+
+// GetScore returns 0 for metadata results (no meaningful score).
+// This method exists to implement the Result interface.
+func (r MetadataResult) GetScore() float32 {
+	return 0
 }
 
 // Compile-time checks to ensure metadataFilterSearch implements MetadataSearch
