@@ -1,0 +1,1348 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Comet - High-Performance Hybrid Vector Database in Go</title>
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        font-family: monospace;
+        line-height: 1.6;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 2rem;
+        color: #333;
+      }
+
+      pre {
+        background: #f8f8f8;
+        padding: 1.5rem;
+        overflow-x: auto;
+        border-radius: 4px;
+        margin: 1.5rem 0;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      code {
+        background: #f5f5f5;
+        padding: 0.2rem 0.4rem;
+        border-radius: 3px;
+      }
+
+      h1,
+      h2 {
+        border-bottom: 1px solid #eee;
+        padding-bottom: 0.3rem;
+      }
+
+      .header {
+        margin-bottom: 2rem;
+      }
+
+      .header-button {
+        color: #333;
+        text-decoration: none;
+        border: 1px solid #333;
+        padding: 0.5rem 1rem;
+        display: inline-block;
+        margin-top: 1rem;
+      }
+
+      .header-button:hover {
+        background: #333;
+        color: #fff;
+      }
+
+      .header-button.inverse {
+        background: #333;
+        color: #fff;
+      }
+
+      .header-button.inverse:hover {
+        background: #fff;
+        color: #333;
+      }
+
+      /* Override some Prism styles to match your design */
+      pre[class*="language-"] {
+        background: #f5f5f5;
+        margin: 0;
+        border: 1px solid #ddd;
+      }
+
+      code[class*="language-"] {
+        background: transparent;
+        padding: 0;
+        border-radius: 0;
+      }
+
+      /* Grayscale theme for Prism */
+      code[class*="language-"],
+      pre[class*="language-"] {
+        color: #383a42;
+        text-shadow: none;
+      }
+
+      .token.comment,
+      .token.prolog,
+      .token.doctype,
+      .token.cdata {
+        color: #a0a1a7;
+        font-style: italic;
+      }
+
+      .token.function,
+      .token.keyword {
+        color: #a626a4;
+        font-weight: normal;
+      }
+
+      .token.string {
+        color: #50a14f;
+      }
+
+      .token.number {
+        color: #986801;
+        font-weight: normal;
+      }
+
+      .token.property {
+        color: #e45649;
+      }
+
+      .token.punctuation {
+        color: #383a42;
+      }
+
+      .token.operator {
+        color: #0184bc;
+        font-weight: normal;
+      }
+
+      .token.constant {
+        color: #986801;
+        font-weight: normal;
+      }
+
+      .token.url {
+        color: #4078f2;
+        text-decoration: underline;
+      }
+
+      code {
+        font-size: 12px;
+      }
+
+      /* Style for bash/shell commands */
+      .language-bash .token.operator,
+      .language-bash .token.parameter {
+        color: #e45649;
+      }
+
+      .language-bash .token.function {
+        color: #4078f2;
+        font-weight: normal;
+      }
+
+      /* Update the -H and -d parameter colors */
+      .token.parameter {
+        color: #986801;
+      }
+
+      /* Adjust spacing in code blocks */
+      pre code {
+        font-family: Monaco, Consolas, "Courier New", monospace;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      /* Remove padding from code elements inside pre */
+      pre code.language-bash,
+      pre code.language-go {
+        padding: 0;
+        background: transparent;
+      }
+
+      /* Override Prism styles */
+      code[class*="language-"],
+      pre[class*="language-"] {
+        text-shadow: none;
+        font-family: Monaco, Consolas, "Courier New", monospace;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      /* Collapsible sections styling */
+      details {
+        margin: 1rem 0;
+        padding: 0.5rem;
+        border: 1px solid #eee;
+        border-radius: 4px;
+      }
+
+      details summary {
+        cursor: pointer;
+        padding: 0.5rem;
+        font-weight: bold;
+      }
+
+      details summary:hover {
+        background: #f5f5f5;
+      }
+
+      details[open] summary {
+        border-bottom: 1px solid #eee;
+        margin-bottom: 1rem;
+      }
+
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 1rem 0;
+      }
+
+      th,
+      td {
+        border: 1px solid #ddd;
+        padding: 0.5rem;
+        text-align: left;
+      }
+
+      th {
+        background: #f5f5f5;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="header">
+      <h1>Comet</h1>
+      <p>
+        A high-performance hybrid vector database written in Go. Combines
+        multiple indexing strategies and search modalities into a unified
+        package. Hybrid retrieval with reciprocal rank fusion, semantic search,
+        full-text search, and metadata filtering — all in pure Go.
+      </p>
+      <div style="display: flex; gap: 1rem">
+        <a href="https://github.com/wizenheimer/comet" class="header-button"
+          >View on GitHub</a
+        >
+        <a
+          href="https://github.com/wizenheimer/comet#readme"
+          target="_blank"
+          class="header-button inverse"
+          >Documentation →</a
+        >
+      </div>
+    </div>
+
+    <h2>Overview</h2>
+    <p>
+      <strong>Comet</strong> is a vector database for understanding how vector
+      databases work from the inside out. Built for developers who want to learn
+      the internals of semantic search, full-text search, and hybrid retrieval
+      systems.
+    </p>
+    <p><strong>What's inside:</strong></p>
+    <ul>
+      <li><strong>5 Vector Index Types:</strong> Flat, HNSW, IVF, PQ, IVFPQ</li>
+      <li><strong>3 Distance Metrics:</strong> L2, L2 Squared, Cosine</li>
+      <li>
+        <strong>Full-Text Search:</strong> BM25 ranking with Unicode
+        tokenization
+      </li>
+      <li>
+        <strong>Metadata Filtering:</strong> Roaring bitmaps + Bit-Sliced
+        Indexes
+      </li>
+      <li>
+        <strong>Hybrid Search:</strong> Combine vector + text + metadata with
+        Reciprocal Rank Fusion
+      </li>
+      <li>
+        <strong>Production Features:</strong> Thread-safe, serialization, soft
+        deletes, configurable parameters
+      </li>
+    </ul>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+High-Level Architecture:
+═══════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────┐
+│                    Application Layer                         │
+│  (Your Go Application Using Comet as a Vector Database)      │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+         ┌─────────────┼─────────────┐
+         │             │             │
+         ▼             ▼             ▼
+┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+│   Vector    │ │    Text     │ │  Metadata   │
+│   Search    │ │   Search    │ │  Filtering  │
+│   Engine    │ │   Engine    │ │   Engine    │
+└──────┬──────┘ └──────┬──────┘ └──────┬──────┘
+       │               │               │
+       ▼               ▼               ▼
+┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+│ HNSW / IVF  │ │ BM25 Index  │ │  Roaring    │
+│ / PQ / Flat │ │ (Inverted)  │ │  Bitmaps    │
+└─────────────┘ └─────────────┘ └─────────────┘
+       │               │               │
+       └───────────────┼───────────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │  Hybrid Search   │
+              │  Coordinator     │
+              │  (Score Fusion)  │
+              └─────────────────┘</pre
+    >
+
+    <h2>Architecture Components</h2>
+
+    <h3>Component A: Vector Index Engine</h3>
+    <p>
+      Manages vector storage and similarity search across multiple index types.
+      Each index type implements a common interface but uses different internal
+      structures.
+    </p>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+Vector Index Internal Structure:
+┌────────────────────────────────────┐
+│  VectorIndex Interface             │
+│  ├─ Train(vectors)                 │
+│  ├─ Add(vector)                    │
+│  ├─ Remove(vector)                 │
+│  └─ NewSearch()                    │
+├────────────────────────────────────┤
+│  Implementations:                  │
+│  ├─ FlatIndex (brute force)        │
+│  ├─ HNSWIndex (graph-based)        │
+│  ├─ IVFIndex (clustering)          │
+│  ├─ PQIndex (quantization)         │
+│  └─ IVFPQIndex (hybrid)            │
+└────────────────────────────────────┘</pre
+    >
+
+    <p><strong>Responsibilities:</strong></p>
+    <ul>
+      <li>Vector preprocessing (normalization for cosine distance)</li>
+      <li>Distance calculations (Euclidean, L2², Cosine)</li>
+      <li>K-nearest neighbor search</li>
+      <li>Serialization/deserialization</li>
+      <li>Soft delete management with flush mechanism</li>
+    </ul>
+
+    <h3>Component B: Text Search Engine</h3>
+    <p>Full-text search using BM25 ranking algorithm with inverted indexes.</p>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+BM25 Index Internal Structure:
+┌────────────────────────────────────┐
+│  Inverted Index                    │
+│  term → RoaringBitmap(docIDs)      │
+├────────────────────────────────────┤
+│  Term Frequencies                  │
+│  term → {docID: count}             │
+├────────────────────────────────────┤
+│  Document Statistics               │
+│  docID → length, tokens            │
+└────────────────────────────────────┘</pre
+    >
+
+    <p><strong>Responsibilities:</strong></p>
+    <ul>
+      <li>Text tokenization (UAX#29 word segmentation)</li>
+      <li>Unicode normalization (NFKC)</li>
+      <li>Inverted index maintenance</li>
+      <li>BM25 score calculation</li>
+      <li>Top-K retrieval with heap</li>
+    </ul>
+
+    <h3>Component C: Metadata Filter Engine</h3>
+    <p>Fast filtering using compressed bitmaps and bit-sliced indexes.</p>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+Metadata Index Internal Structure:
+┌────────────────────────────────────┐
+│  Categorical Fields                │
+│  "category:electronics" → Bitmap   │
+│  "category:books" → Bitmap         │
+├────────────────────────────────────┤
+│  Numeric Fields (BSI)              │
+│  "price" → BitSlicedIndex          │
+│  "rating" → BitSlicedIndex         │
+├────────────────────────────────────┤
+│  All Documents                     │
+│  allDocs → Bitmap                  │
+└────────────────────────────────────┘</pre
+    >
+
+    <p><strong>Responsibilities:</strong></p>
+    <ul>
+      <li>Bitmap index maintenance (Roaring compression)</li>
+      <li>BSI for numeric range queries</li>
+      <li>Boolean query evaluation (AND, OR, NOT)</li>
+      <li>Existence checks</li>
+      <li>Set operations (IN, NOT IN)</li>
+    </ul>
+
+    <h2>API Reference</h2>
+
+    <h3>Installation</h3>
+    <pre><code class="language-bash">go get github.com/wizenheimer/comet</code></pre>
+
+    <h3>Creating a Vector Index</h3>
+    <p>Different index types for different use cases:</p>
+    <pre><code class="language-go">import "github.com/wizenheimer/comet"
+
+// Flat Index (exact search, 100% recall)
+flatIdx, err := comet.NewFlatIndex(384, comet.Cosine)
+
+// HNSW Index (graph-based, 95-99% recall)
+hnswIdx, err := comet.NewHNSWIndex(
+    384,              // dimensions
+    comet.Cosine,     // distance metric
+    16,               // M: connections per layer
+    200,              // efConstruction: build quality
+    200,              // efSearch: search quality
+)
+
+// IVF Index (clustering-based, 85-95% recall)
+ivfIdx, err := comet.NewIVFIndex(
+    384,              // dimensions
+    comet.Cosine,     // distance metric
+    100,              // nClusters: number of partitions
+)
+
+// PQ Index (quantized, memory-efficient)
+pqIdx, err := comet.NewPQIndex(
+    384,              // dimensions
+    comet.Cosine,     // distance metric
+    8,                // nSubspaces: compression level
+)
+
+// IVFPQ Index (hybrid: clustering + quantization)
+ivfpqIdx, err := comet.NewIVFPQIndex(
+    384,              // dimensions
+    comet.Cosine,     // distance metric
+    100,              // nClusters
+    8,                // nSubspaces
+)</code></pre>
+
+    <h3>Adding Vectors</h3>
+    <pre><code class="language-go">// Create a vector node
+vec := make([]float32, 384)
+// ... populate vec with your embedding ...
+
+node := comet.NewVectorNode(vec)
+err := index.Add(*node)
+
+// Add with custom ID
+nodeWithID := comet.NewVectorNodeWithID(42, vec)
+err := index.Add(*nodeWithID)</code></pre>
+
+    <h3>Searching</h3>
+    <pre><code class="language-go">// Basic search
+query := make([]float32, 384)
+// ... populate query vector ...
+
+results, err := index.NewSearch().
+    WithQuery(query).
+    WithK(10).
+    Execute()
+
+if err != nil {
+    log.Fatal(err)
+}
+
+// Process results
+for i, result := range results {
+    fmt.Printf("%d. ID=%d, Score=%.4f\n", 
+        i+1, result.GetId(), result.GetScore())
+}
+
+// Advanced search with filters
+results, err := index.NewSearch().
+    WithQuery(query).
+    WithK(10).
+    WithThreshold(0.5).        // Score threshold
+    WithCandidates(candidates). // Pre-filtered IDs
+    Execute()</code></pre>
+
+    <h3>BM25 Text Search</h3>
+    <pre><code class="language-go">// Create BM25 index
+bm25 := comet.NewBM25SearchIndex()
+
+// Add documents
+bm25.Add(1, "machine learning algorithms")
+bm25.Add(2, "deep learning neural networks")
+bm25.Add(3, "natural language processing")
+
+// Search
+results, err := bm25.NewSearch().
+    WithQuery("machine learning").
+    WithK(10).
+    Execute()
+
+// BM25 parameters (optional)
+bm25.SetK1(1.2)  // Term frequency saturation
+bm25.SetB(0.75)  // Length normalization</code></pre>
+
+    <h3>Metadata Filtering</h3>
+    <pre><code class="language-go">// Create metadata index
+metaIdx := comet.NewRoaringMetadataIndex()
+
+// Add metadata
+metadata := map[string]interface{}{
+    "category": "electronics",
+    "price": 299.99,
+    "in_stock": true,
+}
+metaIdx.Add(1, metadata)
+
+// Query with filters
+results, err := metaIdx.NewSearch().
+    WithFilter(
+        comet.And(
+            comet.Eq("category", "electronics"),
+            comet.Lte("price", 500.0),
+            comet.Eq("in_stock", true),
+        ),
+    ).
+    Execute()
+
+// Supported operators
+comet.Eq(field, value)      // Equal
+comet.Neq(field, value)     // Not equal
+comet.Lt(field, value)      // Less than
+comet.Lte(field, value)     // Less than or equal
+comet.Gt(field, value)      // Greater than
+comet.Gte(field, value)     // Greater than or equal
+comet.In(field, values)     // In set
+comet.NotIn(field, values)  // Not in set
+comet.And(filters...)       // Logical AND
+comet.Or(filters...)        // Logical OR
+comet.Not(filter)           // Logical NOT</code></pre>
+
+    <h3>Hybrid Search</h3>
+    <pre><code class="language-go">// Create hybrid index
+vecIdx, _ := comet.NewHNSWIndex(384, comet.Cosine, 16, 200, 200)
+txtIdx := comet.NewBM25SearchIndex()
+metaIdx := comet.NewRoaringMetadataIndex()
+
+hybrid := comet.NewHybridSearchIndex(vecIdx, txtIdx, metaIdx)
+
+// Add documents with all modalities
+embedding := make([]float32, 384)
+text := "machine learning tutorial"
+metadata := map[string]interface{}{
+    "category": "education",
+    "price": 49.99,
+}
+
+hybrid.Add(embedding, text, metadata)
+
+// Search with fusion
+results, err := hybrid.NewSearch().
+    WithVector(queryVec).
+    WithText("machine learning").
+    WithMetadata(
+        comet.Eq("category", "education"),
+        comet.Lte("price", 100.0),
+    ).
+    WithFusionKind(comet.ReciprocalRankFusion).
+    WithK(10).
+    Execute()
+
+// Fusion strategies
+comet.ReciprocalRankFusion  // Rank-based (recommended)
+comet.WeightedSumFusion     // Score-based with weights
+comet.MaxScoreFusion        // Take maximum score
+comet.MinScoreFusion        // Take minimum score</code></pre>
+
+    <h2>Index Type Internals</h2>
+
+    <h3>Flat Index (Brute Force)</h3>
+    <p>
+      The simplest approach: compare query against every vector. 100% recall, no
+      approximation.
+    </p>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+Query Vector
+     ↓
+┌────────────────────┐
+│  Compare to ALL n  │ ← Every single vector checked
+│     vectors        │   No shortcuts, pure O(n) scan
+└────────────────────┘
+     ↓
+  Top-k results (100% accurate)</pre
+    >
+
+    <p><strong>How it works:</strong></p>
+    <ul>
+      <li>Store vectors as raw float32 arrays</li>
+      <li>Search = compute distance to every vector, keep top-k</li>
+      <li>No index structure, no preprocessing</li>
+    </ul>
+
+    <p><strong>Complexity:</strong></p>
+    <ul>
+      <li>Search: O(n × d) where n = vectors, d = dimensions</li>
+      <li>Memory: O(n × d)</li>
+      <li>Build: O(1)</li>
+    </ul>
+
+    <h3>HNSW Index (Hierarchical Graph)</h3>
+    <p>
+      Build a multi-layer graph where each node connects to nearby vectors.
+      Search by greedy navigation.
+    </p>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+Layer 2:  [A]─────────[D]        Long-range links
+           │           │
+Layer 1:  [A]──[B]────[D]──[E]   Medium-range links
+           │   │ \    │ \  │
+Layer 0:  [A]─[B]─[C]─[D]─[E]─[F] Short-range links (all vectors)
+
+Search: Start at top layer → Navigate greedily → Drop down → Refine</pre
+    >
+
+    <p><strong>How it works:</strong></p>
+    <ul>
+      <li>
+        Each vector exists on Layer 0, subset on higher layers (exponentially
+        fewer)
+      </li>
+      <li>Each node has M connections to nearest neighbors per layer</li>
+      <li>
+        Search: Start at top, greedily move to closest neighbor, descend layers
+      </li>
+      <li>
+        Insert: Add to Layer 0, probabilistically add to higher layers, connect
+        to M nearest
+      </li>
+    </ul>
+
+    <p><strong>Key Parameters:</strong></p>
+    <ul>
+      <li>
+        <code>M</code>: Connections per layer (16-48, higher = better recall but
+        more memory)
+      </li>
+      <li>
+        <code>efConstruction</code>: Build-time quality (200-500, higher =
+        better graph)
+      </li>
+      <li>
+        <code>efSearch</code>: Search-time quality (100-500, higher = better
+        recall)
+      </li>
+    </ul>
+
+    <h3>IVF Index (Inverted File with Clustering)</h3>
+    <p>
+      Partition vectors into clusters using k-means. Search only the nearest
+      clusters.
+    </p>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+Build Phase:
+  All Vectors → k-means → [C1] [C2] [C3] [C4] ... [Cn]
+                           ↓    ↓    ↓    ↓        ↓
+                          {v1} {v8} {v3} {v12}   {v7}
+                          {v5} {v9} {v6}  ...    {v11}
+                           ...  ...  ...         ...
+
+Search Phase:
+  Query → Find nearest nProbe centroids → Search only those clusters
+          ↓
+      [C2] [C3] ← Only search these 2 clusters (not all n)
+       ↓    ↓
+     {...} {...} → Top-k from searched clusters</pre
+    >
+
+    <p><strong>How it works:</strong></p>
+    <ul>
+      <li>Build: k-means clustering to create nClusters partitions</li>
+      <li>Each vector stored in nearest cluster</li>
+      <li>Search: Find nProbe nearest centroids, search only those clusters</li>
+    </ul>
+
+    <p><strong>Key Parameters:</strong></p>
+    <ul>
+      <li>
+        <code>nClusters</code>: Number of partitions (√n to n/10, more = faster
+        search but slower build)
+      </li>
+      <li>
+        <code>nProbe</code>: Clusters to search (1-20, higher = better recall
+        but slower)
+      </li>
+    </ul>
+
+    <h3>PQ Index (Product Quantization)</h3>
+    <p>
+      Split vectors into subvectors, quantize each subvector to 256 codes.
+      Reduce memory by 16-32×.
+    </p>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+Original Vector (384D):
+  [0.23, 0.91, ..., 0.15, 0.44, ..., 0.73, 0.22, ...]
+   \_____48D_____/  \_____48D_____/  \_____48D_____/
+         ↓                ↓                ↓
+    Quantize to      Quantize to      Quantize to
+    uint8 code       uint8 code       uint8 code
+         ↓                ↓                ↓
+   Compressed: [12, 203, 45, 178, 91, 234, 17, 89]
+               \_____________________/
+                    8 bytes vs 1536 bytes</pre
+    >
+
+    <p><strong>How it works:</strong></p>
+    <ul>
+      <li>Split d-dimensional vectors into m subvectors of d/m dimensions</li>
+      <li>Train codebook: k-means on each subspace to create 256 centroids</li>
+      <li>
+        Encode: Replace each subvector with nearest centroid index (uint8)
+      </li>
+      <li>Search: Precompute distance tables, scan using table lookups</li>
+    </ul>
+
+    <h3>IVFPQ Index (Hybrid)</h3>
+    <p>
+      IVF clusters to reduce search space, PQ compression to reduce memory. The
+      ultimate scalability index.
+    </p>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+Build:
+  Vectors → k-means clustering → Store in clusters (IVF)
+                                     ↓
+                              Quantize with PQ
+                                     ↓
+              [Cluster 1]      [Cluster 2]      [Cluster 3]
+                  ↓                ↓                ↓
+           [12,203,45,...]  [91,34,178,...]  [56,211,19,...]
+           [88,9,101,...]   [23,156,88,...]   [199,44,73,...]
+           uint8 codes      uint8 codes       uint8 codes
+
+Search:
+  Query → Find nProbe nearest centroids (IVF)
+              ↓
+          Search only those clusters
+              ↓
+          Use PQ for fast distance computation
+              ↓
+          Top-k results</pre
+    >
+
+    <h2>BM25 Algorithm Deep Dive</h2>
+    <p>
+      BM25 (Best Matching 25) ranks documents by relevance to a text query using
+      term frequency and inverse document frequency.
+    </p>
+
+    <h3>Step-by-Step Algorithm Execution</h3>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+SETUP:
+------
+Corpus:
+  Doc 1: "the quick brown fox jumps over the lazy dog"
+  Doc 2: "the lazy dog sleeps"
+  Doc 3: "quick brown rabbits jump"
+
+Query: "quick brown"
+
+Average Document Length: 7 words
+K1 = 1.2 (term frequency saturation)
+B = 0.75 (length normalization)
+
+STEP 1: Calculate IDF (Inverse Document Frequency)
+----------------------------------------------------
+For term "quick":
+  - Appears in 2 out of 3 documents
+  - IDF = log((3 - 2 + 0.5) / (2 + 0.5) + 1)
+        = log(1.5 / 2.5 + 1)
+        = log(1.6)
+        = 0.470
+
+For term "brown":
+  - Appears in 2 out of 3 documents
+  - IDF = 0.470
+
+STEP 2: Calculate TF Component for Each Document
+-------------------------------------------------
+Doc 1: "the quick brown fox jumps over the lazy dog" (9 words)
+  Term "quick": tf=1
+    TF_score = (1 * (1.2 + 1)) / (1 + 1.2 * (1 - 0.75 + 0.75 * (9/7)))
+             = 2.2 / (1 + 1.2 * 1.214)
+             = 2.2 / 2.457
+             = 0.895
+
+  Term "brown": tf=1
+    TF_score = 0.895 (same calculation)
+
+Doc 2: "the lazy dog sleeps" (4 words)
+  Terms "quick" and "brown": tf=0 for both
+    TF_score = 0
+
+Doc 3: "quick brown rabbits jump" (4 words)
+  Term "quick": tf=1
+    TF_score = (1 * 2.2) / (1 + 1.2 * (1 - 0.75 + 0.75 * (4/7)))
+             = 2.2 / (1 + 1.2 * 0.679)
+             = 2.2 / 1.815
+             = 1.212
+
+  Term "brown": tf=1
+    TF_score = 1.212
+
+STEP 3: Calculate Final BM25 Scores
+------------------------------------
+Doc 1 Score = (0.895 × 0.470) + (0.895 × 0.470) = 0.841
+Doc 2 Score = 0 (no matching terms)
+Doc 3 Score = (1.212 × 0.470) + (1.212 × 0.470) = 1.139
+
+Final Ranking:
+┌─────────┬──────────┬────────┐
+│ Rank    │ Doc ID   │ Score  │
+├─────────┼──────────┼────────┤
+│ 1st     │ Doc 3    │ 1.139  │
+│ 2nd     │ Doc 1    │ 0.841  │
+│ 3rd     │ Doc 2    │ 0.000  │
+└─────────┴──────────┴────────┘
+
+Why Doc 3 scores higher:
+- Both have same term frequencies (1 occurrence each)
+- Doc 3 is shorter (4 words vs 9 words)
+- BM25's length normalization penalizes longer documents
+- Shorter documents with same term frequency are more relevant</pre
+    >
+
+    <h2>Hybrid Search with Score Fusion</h2>
+    <p>
+      Hybrid search combines vector similarity, text relevance, and metadata
+      filtering.
+    </p>
+
+    <h3>Reciprocal Rank Fusion Example</h3>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+INPUT: Query = "machine learning tutorial"
+       Vector = [0.12, 0.45, 0.89, ...]  (embedding)
+       Filter = category="education" AND price<50
+
+STEP 1: Apply Metadata Filter
+─────────────────────────────────────────────────────────
+Candidate Docs: {1, 3, 5, 7, 9, 12, 15, 18, 20}
+
+STEP 2: Vector Search (on candidates)
+─────────────────────────────────────────────────────────
+Doc ID │ Distance │ Rank
+───────┼──────────┼──────
+  1    │  0.12    │  1
+  5    │  0.23    │  2
+  7    │  0.34    │  3
+  12   │  0.45    │  4
+
+STEP 3: Text Search (BM25, on candidates)
+─────────────────────────────────────────────────────────
+Doc ID │ BM25 Score │ Rank
+───────┼────────────┼──────
+  7    │   8.5      │  1
+  1    │   7.2      │  2
+  12   │   6.8      │  3
+  5    │   4.1      │  4
+
+STEP 4: Reciprocal Rank Fusion (RRF)
+─────────────────────────────────────────────────────────
+K = 60 (RRF constant)
+Formula: RRF_score = sum(1 / (K + rank_i))
+
+Doc 1:
+  Vector rank: 1 → 1/(60+1) = 0.0164
+  Text rank: 2   → 1/(60+2) = 0.0161
+  Combined:        0.0325
+
+Doc 5:
+  Vector rank: 2 → 1/(60+2) = 0.0161
+  Text rank: 4   → 1/(60+4) = 0.0156
+  Combined:        0.0317
+
+Doc 7:
+  Vector rank: 3 → 1/(60+3) = 0.0159
+  Text rank: 1   → 1/(60+1) = 0.0164
+  Combined:        0.0323
+
+Doc 12:
+  Vector rank: 4 → 1/(60+4) = 0.0156
+  Text rank: 3   → 1/(60+3) = 0.0159
+  Combined:        0.0315
+
+Final Ranking After Fusion:
+┌──────┬────────────┬──────────┬────────────┐
+│ Rank │ Doc ID     │ RRF Score│ Reason     │
+├──────┼────────────┼──────────┼────────────┤
+│ 1st  │ 1          │ 0.0325   │ Best vector│
+│ 2nd  │ 7          │ 0.0323   │ Best text  │
+│ 3rd  │ 5          │ 0.0317   │ Balanced   │
+│ 4th  │ 12         │ 0.0315   │ Lower both │
+└──────┴────────────┴──────────┴────────────┘
+
+Why RRF over Weighted Sum:
+- Scale Independence: Vector distances (0-2) and BM25 scores (0-100+) 
+  have different ranges
+- Robustness: Ranks are stable even if score distributions change
+- No Tuning: Weighted sum requires manual weight calibration
+- Industry Standard: Used by Elasticsearch, Vespa, and other search engines</pre
+    >
+
+    <h2>Memory Layout</h2>
+
+    <h3>HNSW Index Memory Structure</h3>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+HEADER (24 bytes):
+├─ Magic: "HNSW" (4 bytes)
+├─ Version: 1 (4 bytes)
+├─ Dimensions: 384 (4 bytes)
+├─ M: 16 (4 bytes)
+├─ Max Level: 3 (4 bytes)
+└─ Entry Point ID: 42 (4 bytes)
+
+NODE STORAGE (per node):
+├─ Node ID (4 bytes)
+├─ Level (4 bytes)
+├─ Vector Data (dim × 4 bytes = 1536 bytes for 384-d)
+└─ Edges (per layer):
+   ├─ Layer 0: 2×M neighbors × 4 bytes = 128 bytes
+   ├─ Layer 1: M neighbors × 4 bytes = 64 bytes
+   ├─ Layer 2: M neighbors × 4 bytes = 64 bytes
+   └─ Layer 3: M neighbors × 4 bytes = 64 bytes
+
+TOTAL PER NODE: ~1860 bytes (for 384-d vectors, M=16)
+
+Memory Breakdown:
+┌───────────────────┬──────────┬───────────┐
+│ Component         │ Per Node │ 1M Nodes  │
+├───────────────────┼──────────┼───────────┤
+│ Vectors (raw)     │ 1536 B   │ 1.46 GB   │
+│ Graph structure   │ 320 B    │ 305 MB    │
+│ Metadata          │ 8 B      │ 7.6 MB    │
+│ Total             │ 1864 B   │ 1.78 GB   │
+└───────────────────┴──────────┴───────────┘</pre
+    >
+
+    <h3>Product Quantization Memory</h3>
+    <pre style="background: #fff; border: 1px solid #ddd; padding: 1rem">
+ORIGINAL VECTORS (384-dim × float32):
+Each vector: 384 × 4 bytes = 1536 bytes
+
+PQ COMPRESSED (8 sub-vectors × uint8 codes):
+Each vector: 8 × 1 byte = 8 bytes
+
+CODEBOOKS (for reconstruction):
+8 codebooks × 256 centroids × 48 dims × 4 bytes = 393 KB
+
+For 1M vectors:
+┌───────────────────┬────────────┬──────────┐
+│ Format            │ Size       │ Ratio    │
+├───────────────────┼────────────┼──────────┤
+│ Original (float32)│ 1.46 GB    │ 1x       │
+│ PQ-8              │ 7.6 MB     │ 192x     │
+│ PQ-16             │ 15.3 MB    │ 96x      │
+│ PQ-32             │ 30.5 MB    │ 48x      │
+│ + Codebooks       │ +393 KB    │ -        │
+└───────────────────┴────────────┴──────────┘</pre
+    >
+
+    <h2>Configuration</h2>
+
+    <h3>Distance Metrics</h3>
+    <pre><code class="language-go">// Euclidean (L2): Use when magnitude matters
+euclideanIdx, _ := comet.NewFlatIndex(384, comet.Euclidean)
+
+// L2 Squared: Faster than Euclidean (no sqrt), preserves ranking
+l2sqIdx, _ := comet.NewFlatIndex(384, comet.L2Squared)
+
+// Cosine: Use for normalized vectors (text embeddings)
+cosineIdx, _ := comet.NewFlatIndex(384, comet.Cosine)</code></pre>
+
+    <h3>HNSW Parameters</h3>
+    <p><strong>M (Connections Per Layer)</strong></p>
+    <table>
+      <tr>
+        <th>Value</th>
+        <th>Effect</th>
+      </tr>
+      <tr>
+        <td>4-8</td>
+        <td>Low memory, faster build, lower recall</td>
+      </tr>
+      <tr>
+        <td>12-16</td>
+        <td>Balanced (recommended for most cases)</td>
+      </tr>
+      <tr>
+        <td>24-48</td>
+        <td>High recall, slower build, more memory</td>
+      </tr>
+      <tr>
+        <td>64+</td>
+        <td>Diminishing returns, excessive memory</td>
+      </tr>
+    </table>
+
+    <p><strong>efConstruction (Build-Time Quality)</strong></p>
+    <table>
+      <tr>
+        <th>Value</th>
+        <th>Effect</th>
+      </tr>
+      <tr>
+        <td>100</td>
+        <td>Fast build, lower quality graph</td>
+      </tr>
+      <tr>
+        <td>200</td>
+        <td>Good balance (default)</td>
+      </tr>
+      <tr>
+        <td>400-500</td>
+        <td>Better quality, 2-3x slower build</td>
+      </tr>
+      <tr>
+        <td>800+</td>
+        <td>Marginal gains, very slow build</td>
+      </tr>
+    </table>
+
+    <p><strong>efSearch (Search-Time Quality)</strong></p>
+    <table>
+      <tr>
+        <th>Value</th>
+        <th>Effect</th>
+      </tr>
+      <tr>
+        <td>50</td>
+        <td>Very fast, ~85% recall</td>
+      </tr>
+      <tr>
+        <td>100</td>
+        <td>Fast, ~92% recall</td>
+      </tr>
+      <tr>
+        <td>200</td>
+        <td>Balanced, ~96% recall</td>
+      </tr>
+      <tr>
+        <td>400</td>
+        <td>Slower, ~98% recall</td>
+      </tr>
+      <tr>
+        <td>800</td>
+        <td>Much slower, ~99% recall</td>
+      </tr>
+    </table>
+
+    <h3>IVF Parameters</h3>
+    <p><strong>nClusters (Number of Clusters)</strong></p>
+    <table>
+      <tr>
+        <th>Dataset Size</th>
+        <th>nClusters</th>
+        <th>Typical Range</th>
+      </tr>
+      <tr>
+        <td>10K</td>
+        <td>100</td>
+        <td>50-200</td>
+      </tr>
+      <tr>
+        <td>100K</td>
+        <td>316</td>
+        <td>200-500</td>
+      </tr>
+      <tr>
+        <td>1M</td>
+        <td>1000</td>
+        <td>500-2000</td>
+      </tr>
+      <tr>
+        <td>10M</td>
+        <td>3162</td>
+        <td>2000-5000</td>
+      </tr>
+    </table>
+
+    <p><strong>nProbes (Clusters to Search)</strong></p>
+    <table>
+      <tr>
+        <th>nProbes</th>
+        <th>Effect</th>
+      </tr>
+      <tr>
+        <td>1</td>
+        <td>Fastest, ~60-70% recall</td>
+      </tr>
+      <tr>
+        <td>8</td>
+        <td>Good balance, ~85% recall</td>
+      </tr>
+      <tr>
+        <td>16</td>
+        <td>Better recall, ~92% recall</td>
+      </tr>
+      <tr>
+        <td>32</td>
+        <td>High recall, ~96% recall</td>
+      </tr>
+      <tr>
+        <td>64</td>
+        <td>Very high recall, slower</td>
+      </tr>
+    </table>
+
+    <h2>Data Structures</h2>
+
+    <h3>HNSW Graphs</h3>
+    <p>
+      Multi-layer skip lists for approximate nearest neighbor search. Each node
+      maintains connections at multiple levels, with exponentially decreasing
+      density at higher levels.
+    </p>
+
+    <h3>Roaring Bitmaps</h3>
+    <p>
+      Compressed bitmaps for metadata filtering. Uses three container types:
+    </p>
+    <ul>
+      <li>
+        <strong>Array containers:</strong> For sparse sets (< 4096 elements),
+        stores sorted uint16 array
+      </li>
+      <li>
+        <strong>Bitmap containers:</strong> For dense sets, uses 8KB bitmap
+      </li>
+      <li>
+        <strong>Run containers:</strong> For consecutive runs, stores (start,
+        length) pairs
+      </li>
+    </ul>
+
+    <h3>Bit-Sliced Index (BSI)</h3>
+    <p>
+      Efficient numeric range queries without full scans. Each bit position of
+      numeric values stored in separate bitmap, enabling fast range queries via
+      bitmap operations.
+    </p>
+
+    <h3>Product Quantization Codebooks</h3>
+    <p>
+      Learned k-means centroids for vector compression. Splits vectors into
+      subspaces, each with 256 centroids. Vectors encoded as indices into
+      codebooks.
+    </p>
+
+    <h3>Inverted Indexes</h3>
+    <p>
+      Token-to-document mappings for full-text search. Maps each term to
+      RoaringBitmap of document IDs, with auxiliary structures for term
+      frequencies and document statistics.
+    </p>
+
+    <h2>Index Comparison</h2>
+    <table>
+      <tr>
+        <th>Index</th>
+        <th>Recall</th>
+        <th>Search Speed</th>
+        <th>Memory</th>
+        <th>Build Time</th>
+        <th>Best For</th>
+      </tr>
+      <tr>
+        <td>Flat</td>
+        <td>100%</td>
+        <td>Slow O(n)</td>
+        <td>High</td>
+        <td>Instant</td>
+        <td>&lt;10k vectors, benchmarks</td>
+      </tr>
+      <tr>
+        <td>HNSW</td>
+        <td>90-99%</td>
+        <td>Fast O(log n)</td>
+        <td>Highest</td>
+        <td>Slow</td>
+        <td>10k-10M vectors, low latency</td>
+      </tr>
+      <tr>
+        <td>IVF</td>
+        <td>80-95%</td>
+        <td>Medium</td>
+        <td>High</td>
+        <td>Medium</td>
+        <td>&gt;100k vectors, moderate recall</td>
+      </tr>
+      <tr>
+        <td>PQ</td>
+        <td>70-85%</td>
+        <td>Fast</td>
+        <td>Lowest</td>
+        <td>Slow</td>
+        <td>&gt;1M vectors, memory-constrained</td>
+      </tr>
+      <tr>
+        <td>IVFPQ</td>
+        <td>70-90%</td>
+        <td>Fastest</td>
+        <td>Very Low</td>
+        <td>Slow</td>
+        <td>&gt;10M vectors, billion-scale</td>
+      </tr>
+    </table>
+
+    <h2>Decision Guide</h2>
+
+    <h3>By Dataset Size</h3>
+    <ul>
+      <li>
+        <strong>Small data (&lt;10k):</strong> Flat - brute force is fast enough
+      </li>
+      <li>
+        <strong>Medium data (10k-1M):</strong> HNSW - best recall/speed tradeoff
+      </li>
+      <li>
+        <strong>Large data (1M-100M):</strong> IVF or PQ - choose speed (IVF) vs
+        memory (PQ)
+      </li>
+      <li>
+        <strong>Massive data (&gt;100M):</strong> IVFPQ - only option that
+        scales to billions
+      </li>
+    </ul>
+
+    <h3>By Use Case</h3>
+    <ul>
+      <li><strong>Semantic search:</strong> HNSW + Cosine distance</li>
+      <li>
+        <strong>Document retrieval:</strong> Hybrid search with BM25 + vector
+      </li>
+      <li>
+        <strong>Product recommendations:</strong> HNSW + metadata filtering
+      </li>
+      <li><strong>Question answering:</strong> Hybrid with RRF fusion</li>
+      <li><strong>Image similarity:</strong> HNSW or IVF with L2 distance</li>
+    </ul>
+
+    <h2>Testing</h2>
+
+    <h3>Running Tests</h3>
+    <pre><code class="language-bash"># Run all tests
+make test
+
+# Run tests with coverage
+make test-coverage
+
+# Run benchmarks
+make bench
+
+# Run specific test
+go test -run TestFlatIndex
+
+# Run with race detector
+go test -race ./...
+
+# Verbose output
+go test -v ./...</code></pre>
+
+    <h3>Example Test Structure</h3>
+    <pre><code class="language-go">func TestFlatIndexSearch(t *testing.T) {
+    // Setup
+    index, err := comet.NewFlatIndex(128, comet.Cosine)
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    // Add test vectors
+    vectors := generateTestVectors(1000, 128)
+    for _, vec := range vectors {
+        node := comet.NewVectorNode(vec)
+        if err := index.Add(*node); err != nil {
+            t.Fatal(err)
+        }
+    }
+
+    // Execute search
+    query := generateTestVectors(1, 128)[0]
+    results, err := index.NewSearch().
+        WithQuery(query).
+        WithK(10).
+        Execute()
+
+    // Verify
+    if err != nil {
+        t.Errorf("Search failed: %v", err)
+    }
+    if len(results) != 10 {
+        t.Errorf("Expected 10 results, got %d", len(results))
+    }
+
+    // Verify results are sorted by score
+    for i := 1; i < len(results); i++ {
+        if results[i-1].GetScore() > results[i].GetScore() {
+            t.Errorf("Results not sorted by score")
+        }
+    }
+}</code></pre>
+
+    <h2>References</h2>
+    <ul>
+      <li>
+        <strong>HNSW Algorithm:</strong>
+        <a href="https://arxiv.org/abs/1603.09320" target="_blank">
+          Efficient and robust approximate nearest neighbor search using
+          Hierarchical Navigable Small World graphs
+        </a>
+      </li>
+      <li>
+        <strong>Product Quantization:</strong>
+        <a href="https://ieeexplore.ieee.org/document/5432202" target="_blank">
+          Product quantization for nearest neighbor search
+        </a>
+      </li>
+      <li>
+        <strong>BM25 Ranking:</strong>
+        <a
+          href="https://www.staff.city.ac.uk/~sbrp622/papers/foundations_bm25_review.pdf"
+          target="_blank"
+        >
+          The Probabilistic Relevance Framework: BM25 and Beyond
+        </a>
+      </li>
+      <li>
+        <strong>Roaring Bitmaps:</strong>
+        <a href="https://arxiv.org/abs/1603.06549" target="_blank">
+          Better bitmap performance with Roaring bitmaps
+        </a>
+      </li>
+      <li>
+        <strong>Reciprocal Rank Fusion:</strong>
+        <a
+          href="https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf"
+          target="_blank"
+        >
+          Reciprocal Rank Fusion outperforms Condorcet and individual Rank
+          Learning Methods
+        </a>
+      </li>
+    </ul>
+
+    <footer style="margin-top: 4rem">
+      <p>Built by <a href="https://github.com/wizenheimer">wizenheimer</a></p>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  </body>
+</html>

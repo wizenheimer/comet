@@ -2,13 +2,13 @@
 
 ![Cover](media/cover.png)
 
-A high-performance hybrid vector index written in Go. Comet brings together multiple indexing strategies and search modalities into a unified, hackable package. Hybrid retrieval with reciprocal rank fusion, autocut, pre-filtering, semantic search, full-text search, and multi-KNN searches, and multi-query operations — all in pure Go.
+A high-performance hybrid vector store written in Go. Comet brings together multiple indexing strategies and search modalities into a unified, hackable package. Hybrid retrieval with reciprocal rank fusion, autocut, pre-filtering, semantic search, full-text search, and multi-KNN searches, and multi-query operations — all in pure Go.
 
 Understand search internals from the inside out. Built for hackers, not hyperscalers. Tiny enough to fit in your head. Decent enough to blow it.
 
 **Choose from:**
 
-- **Flat** (exact), **HNSW** (graph), **IVF** (clustering), **PQ** (quantization), or **IVFPQ** (hybrid) indexes
+- **Flat** (exact), **HNSW** (graph), **IVF** (clustering), **PQ** (quantization), or **IVFPQ** (hybrid) storage backends
 - **Full-Text Search**: BM25 ranking algorithm with tokenization and normalization
 - **Metadata Filtering**: Fast filtering using Roaring Bitmaps and Bit-Sliced Indexes
 - **Ranking Programmability**: Reciprocal Rank Fusion, Fixed size result sets, Threshold based result sets, Dynamic result sets etc.
@@ -37,7 +37,7 @@ Everything you need to understand how vector databases actually work—and build
 
 **What's inside:**
 
-- **5 Vector Index Types**: Flat, HNSW, IVF, PQ, IVFPQ
+- **5 Vector Storage Types**: Flat, HNSW, IVF, PQ, IVFPQ
 - **3 Distance Metrics**: L2, L2 Squared, Cosine
 - **Full-Text Search**: BM25 ranking with Unicode tokenization
 - **Metadata Filtering**: Roaring bitmaps + Bit-Sliced Indexes
@@ -49,7 +49,7 @@ Everything you need to understand how vector databases actually work—and build
 
 ## Features
 
-### Vector Indexes
+### Vector Storage
 
 - **Flat**: Brute-force exact search (100% recall baseline)
 - **HNSW**: Hierarchical navigable small world graphs (95-99% recall, O(log n) search)
@@ -105,7 +105,7 @@ import (
 )
 
 func main() {
-    // Create a vector index (384-dimensional embeddings with cosine distance)
+    // Create a vector store (384-dimensional embeddings with cosine distance)
     index, err := comet.NewFlatIndex(384, comet.Cosine)
     if err != nil {
         log.Fatal(err)
@@ -186,7 +186,7 @@ High-Level Architecture Diagram:
 
 ### Component Details
 
-#### Component A: Vector Index Engine
+#### Component A: Vector Storage Engine
 
 Manages vector storage and similarity search across multiple index types.
 
@@ -419,9 +419,9 @@ For 1M vectors:
 
 ## Core Concepts
 
-### Concept 1: Vector Indexes and Distance Metrics
+### Concept 1: Vector Storage and Distance Metrics
 
-A vector index stores high-dimensional embeddings and enables efficient similarity search. The choice of index type determines the tradeoff between search speed, memory usage, and accuracy.
+A vector store maintains high-dimensional embeddings and enables efficient similarity search. The choice of storage type determines the tradeoff between search speed, memory usage, and accuracy.
 
 **Example: How vectors are stored and searched**
 
@@ -444,10 +444,10 @@ The index computes distances and returns nearest neighbors:
 └─────────────┴────────────────────────────────┴──────────┘
 ```
 
-**Visual Representation: Index Types Comparison**
+**Visual Representation: Storage Types Comparison**
 
 ```
-Index Performance Tradeoffs
+Storage Performance Tradeoffs
 ═══════════════════════════════════════════════════════════
 
 Flat Index (Brute Force)
@@ -486,7 +486,7 @@ Product Quantization (Compression)
 └──────────────────────────────────────────────────────┘
 ```
 
-**Benefits of Different Index Types:**
+**Benefits of Different Storage Types:**
 
 - **Flat Index**: Perfect recall, simple, no training. Use for small datasets (<100K vectors)
 - **HNSW**: Excellent speed/accuracy tradeoff, no training. Use for most production workloads
@@ -655,7 +655,7 @@ Final Ranking After Fusion:
 - **No Tuning**: Weighted sum requires manual weight calibration
 - **Industry Standard**: Used by Elasticsearch, Vespa, and other search engines
 
-## Index Type Deep Dive
+## Storage Type Deep Dive
 
 **Choose your poison:** Flat (exact), HNSW (graph), IVF (clustering), PQ (quantization), or IVFPQ (hybrid). Each trades speed, memory, and accuracy differently.
 
@@ -1122,7 +1122,7 @@ for _, id := range deleteIDs {
 }
 index.Flush()  // Batch cleanup
 
-// Good: Choose appropriate index type
+// Good: Choose appropriate storage type
 // Small dataset (<100K): Use FlatIndex
 flatIdx, _ := comet.NewFlatIndex(384, comet.Cosine)
 
@@ -1138,7 +1138,7 @@ ivfIdx, _ := comet.NewIVFIndex(384, comet.Cosine, 1000)
 ### Avoid This ✗
 
 ```go
-// Bad: Don't create new index for every search
+// Bad: Don't create new store for every search
 for _, query := range queries {
     index, _ := comet.NewFlatIndex(384, comet.Cosine)  // ✗ Wasteful!
     index.Add(vectors...)
@@ -1233,8 +1233,8 @@ for _, result := range results {
 
 ```go
 // Proper resource lifecycle with serialization
-func SaveAndLoadIndex(vectors [][]float32) error {
-    // Create index
+func SaveAndLoadStore(vectors [][]float32) error {
+    // Create vector store
     index, err := comet.NewFlatIndex(384, comet.Cosine)
     if err != nil {
         return err
@@ -1417,7 +1417,7 @@ type Document struct {
 }
 
 func main() {
-    // Create HNSW index for 384-dim embeddings
+    // Create HNSW vector store for 384-dim embeddings
     m, efC, efS := comet.DefaultHNSWConfig()
     index, _ := comet.NewHNSWIndex(384, comet.Cosine, m, efC, efS)
 
@@ -1476,7 +1476,7 @@ func RecommendSimilarProducts(
     maxPrice float64,
     category string,
 ) ([]Product, error) {
-    // Setup hybrid index
+    // Setup hybrid store
     vecIdx, _ := comet.NewHNSWIndex(512, comet.Cosine, 16, 200, 200)
     metaIdx := comet.NewRoaringMetadataIndex()
     hybrid := comet.NewHybridSearchIndex(vecIdx, nil, metaIdx)
@@ -1519,7 +1519,7 @@ func RecommendSimilarProducts(
 
 ```go
 func AnswerQuestion(question string) ([]string, error) {
-    // Create hybrid index
+    // Create hybrid store
     vecIdx, _ := comet.NewFlatIndex(768, comet.Cosine)  // BERT embeddings
     txtIdx := comet.NewBM25SearchIndex()
     hybrid := comet.NewHybridSearchIndex(vecIdx, txtIdx, nil)
