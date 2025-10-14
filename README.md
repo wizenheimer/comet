@@ -2349,6 +2349,320 @@ results, _ := hybridIndex.NewSearch().
     Execute()
 ```
 
+## Persistent Storage
+
+Comet provides a durable, scalable storage layer that persists your hybrid search index to disk using an LSM-tree inspired architecture. This enables datasets larger than RAM while maintaining fast in-memory writes.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        STORAGE LAYERS                            │
+└─────────────────────────────────────────────────────────────────┘
+
+                    MEMORY (Fast, Volatile)
+    ┌──────────────────────────────────────────────────┐
+    │  Active Memtable (Mutable)                       │
+    │  • Size: 0-100MB                                 │
+    │  • Accepts all writes                            │
+    │  • Always searched first                         │
+    └──────────────────┬───────────────────────────────┘
+                       │ (fills up)
+    ┌──────────────────▼───────────────────────────────┐
+    │  Frozen Memtables (Immutable Queue)              │
+    │  • Size: 0-200MB total                           │
+    │  • Waiting to be flushed                         │
+    └──────────────────┬───────────────────────────────┘
+                       │ (background flush)
+                       ▼
+                    DISK (Durable, Larger)
+    ┌──────────────────────────────────────────────────┐
+    │  Segments (Compressed, Immutable)                │
+    │  • 20-40MB each (gzip compressed)                │
+    │  • Lazy-loaded and cached                        │
+    │  • Searched in parallel                          │
+    └──────────────────┬───────────────────────────────┘
+                       │ (background compaction)
+                       ▼
+    ┌──────────────────────────────────────────────────┐
+    │  Compacted Segments (Larger, fewer files)        │
+    │  • 100-500MB each                                │
+    │  • Merged from multiple segments                 │
+    │  • Deleted docs removed                          │
+    └──────────────────────────────────────────────────┘
+```
+
+### What Are Segments?
+
+**Segments** are immutable, compressed snapshots of your data on disk. Each segment contains:
+
+```
+Segment #000001
+├── hybrid_000001.bin.gz    → Document IDs and metadata
+├── vector_000001.bin.gz    → Vector index (HNSW/IVF/etc.)
+├── text_000001.bin.gz      → BM25 inverted index
+└── metadata_000001.bin.gz  → Roaring bitmap index
+```
+
+**Key Properties:**
+
+- **Immutable**: Once written, never modified
+- **Compressed**: gzip level 9 (~75% reduction)
+- **Lazy-loaded**: Only loaded from disk when needed
+- **Cached**: Stays in memory after first access
+
+### How Searches Work
+
+Searches scan all data sources from newest to oldest, then merge results:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      SEARCH FLOW                             │
+└─────────────────────────────────────────────────────────────┘
+
+Query: WithVector(v).WithText("query").WithK(10)
+  │
+  ├─→ 1. Search Active Memtable (in-memory, newest)
+  │   └─→ Results: [doc_100: 0.95, doc_99: 0.89]
+  │
+  ├─→ 2. Search Frozen Memtables (in-memory, pending flush)
+  │   └─→ Results: [doc_95: 0.92, doc_90: 0.88]
+  │
+  ├─→ 3. Search Segments (on disk, parallel)
+  │   ┌──────────┐  ┌──────────┐  ┌──────────┐
+  │   │Segment 1 │  │Segment 2 │  │Segment 3 │
+  │   └────┬─────┘  └────┬─────┘  └────┬─────┘
+  │        └─────────────┴─────────────┘
+  │        └─→ Results: [doc_80: 0.91, doc_50: 0.86]
+  │
+  ├─→ 4. Merge & Deduplicate (keep highest score per ID)
+  │   └─→ Combined: [100, 95, 80, 99, 90, ...]
+  │
+  └─→ 5. Sort & Limit
+      └─→ Top-10: [100: 0.95, 95: 0.92, 80: 0.91, ...]
+```
+
+**Performance Characteristics:**
+
+| Component       | Speed     | Data Freshness     |
+| --------------- | --------- | ------------------ |
+| Active Memtable | Very Fast | Real-time (newest) |
+| Frozen Memtable | Very Fast | Recent (pending)   |
+| Segments (few)  | Fast      | Historical         |
+| Segments (many) | Slower    | Historical         |
+
+_More segments = slower searches. This is why compaction is important!_
+
+### How Writes Work
+
+Writes always go to the active memtable for fast performance:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      WRITE FLOW                              │
+└─────────────────────────────────────────────────────────────┘
+
+Add(vector, text, metadata)
+  │
+  ├─→ 1. Add to Active Memtable
+  │      • Check space available
+  │      • If full → rotate to new memtable
+  │      • Add document
+  │      • Return immediately ✓
+  │
+  ├─→ 2. Check Flush Threshold
+  │      Total memtable size ≥ 200MB?
+  │      • Yes → Schedule background flush
+  │      • No  → Continue
+  │
+  └─→ [Write complete - returned to caller]
+
+Meanwhile, in background:
+  │
+  └─→ Background Flush Worker
+      • Freeze memtables
+      • Serialize to bytes
+      • Compress with gzip
+      • Write to disk as segment
+```
+
+**Memtable Rotation:**
+
+```
+BEFORE Rotation:
+┌──────────────────────────────────────────┐
+│  Active Memtable (100MB / 100MB) FULL!  │
+└──────────────────────────────────────────┘
+
+AFTER Rotation:
+┌──────────────────────────────────────────┐
+│  Frozen Memtable (100MB) ← Queued flush  │
+├──────────────────────────────────────────┤
+│  Active Memtable (0MB)   ← Ready writes  │
+└──────────────────────────────────────────┘
+```
+
+### How Compaction Works
+
+Compaction merges multiple small segments into fewer larger ones:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   COMPACTION FLOW                            │
+└─────────────────────────────────────────────────────────────┘
+
+BEFORE Compaction:
+┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
+│Segment 1 │  │Segment 2 │  │Segment 3 │  │Segment 4 │  │Segment 5 │
+│ 1K docs  │  │ 1K docs  │  │ 1K docs  │  │ 1K docs  │  │ 1K docs  │
+│  25MB    │  │  25MB    │  │  25MB    │  │  25MB    │  │  25MB    │
+└──────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘
+
+Total: 5 segments, 5,000 docs, 125MB
+Search: 5 parallel searches + merge (slower)
+
+                         ↓ Compaction
+
+AFTER Compaction:
+┌───────────────────────────┐
+│    Merged Segment #006    │
+│       4,500 docs          │
+│         95MB              │
+│  (500 deleted docs gone)  │
+└───────────────────────────┘
+
+Total: 1 segment, 4,500 docs, 95MB
+Search: 1 search (faster!)
+Space saved: 30MB reclaimed
+```
+
+**Benefits:**
+
+- ✓ Fewer segments → faster searches
+- ✓ Deleted documents removed
+- ✓ Disk space reclaimed
+- ✓ Better I/O patterns
+
+### Basic Usage
+
+```go
+import "github.com/wizenheimer/comet"
+
+// Configure storage
+config := comet.DefaultStorageConfig("./data")
+config.VectorIndexTemplate, _ = comet.NewFlatIndex(384, comet.Cosine)
+config.TextIndexTemplate = comet.NewBM25SearchIndex()
+config.MetadataIndexTemplate = comet.NewRoaringMetadataIndex()
+
+// Open persistent storage
+store, err := comet.OpenPersistentHybridIndex(config)
+if err != nil {
+    log.Fatal(err)
+}
+defer store.Close()
+
+// Add documents (same API as in-memory)
+id, _ := store.Add(vector, "document text", metadata)
+
+// Search (same API as in-memory)
+results, _ := store.NewSearch().
+    WithVector(queryVector).
+    WithText("search terms").
+    WithK(10).
+    Execute()
+
+// Force flush to disk
+store.Flush()
+
+// Trigger compaction manually
+store.TriggerCompaction()
+```
+
+### Configuration Options
+
+```go
+config := &comet.StorageConfig{
+    BaseDir:             "./data",
+    MemtableSizeLimit:   100 * 1024 * 1024,  // 100MB per memtable
+    FlushThreshold:      200 * 1024 * 1024,  // Flush at 200MB total
+    CompactionInterval:  5 * time.Minute,    // Check every 5 min
+    CompactionThreshold: 5,                  // Compact when ≥5 segments
+}
+```
+
+### When to Use Persistent Storage
+
+**Use persistent storage when:**
+
+- ✓ Your index needs to survive restarts
+- ✓ Dataset size exceeds available RAM
+- ✓ You need write durability
+- ✓ You want automatic compaction
+
+**Use in-memory when:**
+
+- ✓ Dataset fits comfortably in RAM
+- ✓ Maximum search speed is critical
+- ✓ Data is ephemeral or frequently rebuilt
+- ✓ Simplicity over durability
+
+### Important Notes
+
+**Eventually Consistent Deletes:**
+
+```
+Remove(docID)
+  ├─→ Removed from active memtable: ✓ Immediate
+  ├─→ Still in frozen memtables:    ✗ Until flushed
+  └─→ Still in segments:            ✗ Until compacted
+
+Timeline:
+  T0: Delete called
+  T1: Removed from active ✓
+  T2: Still found in old data ✗
+  T3: Compaction runs
+  T4: Completely removed ✓
+```
+
+**Crash Recovery:**
+
+- Segments on disk survive crashes ✓
+- Active/frozen memtables lost (no WAL yet) ✗
+- Always call `Close()` for graceful shutdown
+
+**Monitoring:**
+
+```go
+// Check segment count
+segmentCount := store.segmentManager.Count()
+
+// Check disk usage
+diskUsage := store.segmentManager.TotalSize()
+
+// Check memtable queue depth
+queueDepth := store.memtableQueue.Count()
+
+// Evict segment caches (memory pressure)
+store.segmentManager.EvictAllCaches()
+```
+
+### File Structure
+
+```
+data/
+├── LOCK                      # Process lock file
+├── hybrid_000001.bin.gz      # Segment 1 files
+├── vector_000001.bin.gz
+├── text_000001.bin.gz
+├── metadata_000001.bin.gz
+├── hybrid_000002.bin.gz      # Segment 2 files
+├── vector_000002.bin.gz
+├── text_000002.bin.gz
+└── metadata_000002.bin.gz
+```
+
+For complete documentation, see [docs/PERSISTENCE.md](docs/PERSISTENCE.md).
+
 ## Use Cases
 
 ### Use Case 1: Semantic Document Search
