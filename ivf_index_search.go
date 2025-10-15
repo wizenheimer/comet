@@ -24,6 +24,7 @@ type ivfIndexSearch struct {
 	threshold       float32
 	aggregationKind ScoreAggregationKind
 	cutoff          int
+	reranker        Reranker
 }
 
 // WithQuery sets the query vector(s) - supports single or batch queries.
@@ -92,6 +93,13 @@ func (s *ivfIndexSearch) WithDocumentIDs(docIDs ...uint32) VectorSearch {
 	return s
 }
 
+// WithReranker sets a custom reranker to reorder search results.
+// The reranker is applied after initial search results are obtained.
+func (s *ivfIndexSearch) WithReranker(reranker Reranker) VectorSearch {
+	s.reranker = reranker
+	return s
+}
+
 // Execute performs the actual search and returns results.
 //
 // This method validates the search configuration and then executes the search
@@ -152,6 +160,11 @@ func (s *ivfIndexSearch) Execute() ([]VectorResult, error) {
 	// Apply k limit and autocut
 	results := LimitResults(aggregatedResults, s.k)
 	results = AutocutResults(results, s.cutoff)
+
+	// Apply reranker if set
+	if s.reranker != nil {
+		results = s.reranker.Rerank(results)
+	}
 
 	return results, nil
 }

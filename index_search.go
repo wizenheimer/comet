@@ -18,6 +18,47 @@ type Result interface {
 	GetScore() float32
 }
 
+// Reranker is an interface for reranking vector search results.
+//
+// Rerankers take the initial search results and reorder them based on
+// custom logic. This is useful for:
+//   - Cross-encoder reranking for improved relevance
+//   - Custom scoring functions
+//   - Post-processing result ordering
+//
+// The reranker receives results and returns them in a new order.
+// It can also modify scores if needed.
+//
+// Example implementation:
+//
+//	type CustomReranker struct {}
+//
+//	func (r *CustomReranker) Rerank(results []VectorResult) []VectorResult {
+//	    // Custom reranking logic
+//	    // For example, use a cross-encoder model to rescore
+//	    return reorderedResults
+//	}
+//
+// Example usage:
+//
+//	reranker := &CustomReranker{}
+//	results, _ := index.NewSearch().
+//	    WithQuery(queryVec).
+//	    WithK(100).
+//	    WithReranker(reranker).
+//	    Execute()
+type Reranker interface {
+	// Rerank takes search results and returns them in a new order.
+	// The implementation can modify scores and/or reorder results.
+	//
+	// Parameters:
+	//   - results: Initial search results to be reranked
+	//
+	// Returns:
+	//   - []VectorResult: Reranked results (can be same length or shorter)
+	Rerank(results []VectorResult) []VectorResult
+}
+
 // VectorResult represents a search result from vector similarity search.
 //
 // Each result contains the matched vector node and a similarity score.
@@ -211,8 +252,25 @@ type VectorSearch interface {
 	//   - VectorSearch: The search instance for method chaining
 	WithDocumentIDs(docIDs ...uint32) VectorSearch
 
+	// WithReranker sets a custom reranker to reorder search results.
+	// The reranker is applied after initial search results are obtained
+	// but before final results are returned.
+	//
+	// This is useful for:
+	//   - Applying cross-encoder models for improved relevance
+	//   - Custom scoring and reordering logic
+	//   - Post-processing search results
+	//
+	// Parameters:
+	//   - reranker: A Reranker implementation (nil disables reranking)
+	//
+	// Returns:
+	//   - VectorSearch: The search instance for method chaining
+	WithReranker(reranker Reranker) VectorSearch
+
 	// Execute performs the configured search and returns results.
 	// Results are sorted by distance (ascending - lower is better).
+	// If a reranker is set, it will be applied before returning results.
 	//
 	// Returns:
 	//   - []VectorResult: Sorted search results

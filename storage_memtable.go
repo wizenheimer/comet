@@ -361,14 +361,19 @@ func (mq *memtableQueue) listFrozen() []*memtable {
 }
 
 // remove removes a memtable from the queue.
+// It maintains the queue order, ensuring the mutable memtable stays at the end.
 func (mq *memtableQueue) remove(m *memtable) {
 	mq.mu.Lock()
 	defer mq.mu.Unlock()
 
 	for i, mt := range mq.queue {
 		if mt == m {
-			// Remove by swapping with last element
-			mq.queue[i] = mq.queue[len(mq.queue)-1]
+			// Never remove the last element (mutable memtable)
+			if i == len(mq.queue)-1 {
+				return
+			}
+			// Remove by shifting elements to maintain order
+			copy(mq.queue[i:], mq.queue[i+1:])
 			mq.queue = mq.queue[:len(mq.queue)-1]
 			return
 		}

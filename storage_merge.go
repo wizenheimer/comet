@@ -44,5 +44,3 @@ func sortResultsByScore(results []HybridSearchResult) {
 		return results[i].Score > results[j].Score
 	})
 }
-
-

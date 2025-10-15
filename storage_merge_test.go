@@ -228,4 +228,3 @@ func BenchmarkSortResultsByScore(b *testing.B) {
 		sortResultsByScore(testResults)
 	}
 }
-
